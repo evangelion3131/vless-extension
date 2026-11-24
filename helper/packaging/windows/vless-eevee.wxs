@@ -10,7 +10,7 @@
     <CustomAction
       Id="StartWorker"
       FileRef="HelperExe"
-      ExeCommand="-daemon -data-dir &quot;[INSTALLFOLDER]&quot;"
+      ExeCommand="-daemon -data-dir &quot;[INSTALLFOLDER].&quot;"
       Execute="immediate"
       Impersonate="yes"
       Return="asyncNoWait" />
@@ -71,7 +71,7 @@
         <RegistryValue
           Type="string"
           Name="vless-eevee-worker"
-          Value="&quot;[INSTALLFOLDER]helper.exe&quot; -daemon -data-dir &quot;[INSTALLFOLDER]&quot;" />
+          Value="&quot;[INSTALLFOLDER]helper.exe&quot; -daemon -data-dir &quot;[INSTALLFOLDER].&quot;" />
       </RegistryKey>
     </Component>
   </Fragment>

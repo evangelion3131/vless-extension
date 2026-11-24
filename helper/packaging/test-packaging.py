@@ -53,6 +53,8 @@ wix_text = wix.read_text()
 for required in ("vless-eevee.crx", "StartWorker", "StopWorker", HOST_NAME):
     if required not in wix_text:
         fail(f"WiX package is missing {required}")
+if wix_text.count("&quot;[INSTALLFOLDER].&quot;") != 2:
+    fail("Windows worker data directory must avoid a quoted trailing backslash")
 
 mac_text = scripts[1].read_text()
 if "LaunchDaemons/com.vless.eevee.worker.plist" not in mac_text:
