@@ -70,6 +70,12 @@ jobs:
           pattern: installer-*
           path: dist
           merge-multiple: true
+      - name: Package browser extension
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          VERSION="${TAG#v}"
+          (cd extension && zip -r "../dist/extension-v${VERSION}.zip" .)
       - name: Create release and upload packages
         env:
           GH_TOKEN: ${{ github.token }}
