@@ -59,16 +59,14 @@ jobs:
           if-no-files-found: error
 
   macos:
-    runs-on: ${{ matrix.runner }}
+    runs-on: macos-13
     strategy:
       fail-fast: false
       matrix:
         include:
           - arch: amd64
-            runner: macos-13
             artifact: installer-macos-amd64
           - arch: arm64
-            runner: macos-14
             artifact: installer-macos-arm64
     steps:
       - uses: actions/checkout@v4
