@@ -4,12 +4,17 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
 func TestWorkDirUsesUserConfigDirectory(t *testing.T) {
 	configDir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", configDir)
+	configEnv := "XDG_CONFIG_HOME"
+	if runtime.GOOS == "windows" {
+		configEnv = "APPDATA"
+	}
+	t.Setenv(configEnv, configDir)
 
 	dir, err := workDir()
 	if err != nil {
@@ -22,8 +27,10 @@ func TestWorkDirUsesUserConfigDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := info.Mode().Perm(), os.FileMode(0700); got != want {
-		t.Fatalf("work directory permissions = %04o, want %04o", got, want)
+	if runtime.GOOS != "windows" {
+		if got, want := info.Mode().Perm(), os.FileMode(0700); got != want {
+			t.Fatalf("work directory permissions = %04o, want %04o", got, want)
+		}
 	}
 }
 

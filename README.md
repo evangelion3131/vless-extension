@@ -464,7 +464,7 @@ GitHub Actions собирает установщики при отправке G
 
 - **Linux:** устанавливается системная служба `vless-eevee-worker.service`, CRX и Native Messaging manifests. Worker запускается через systemd и перезапускается при сбое. Конфигурация хранится в `/var/lib/vless-eevee`.
 - **macOS:** создаётся LaunchDaemon `com.vless.eevee.worker` и системные Native Messaging manifests.
-- **Windows:** Worker запускается установщиком и добавляется в автозапуск через реестр.
+- **Windows:** Worker запускается установщиком и добавляется в автозапуск через реестр. Пользовательские конфиги хранятся в `%APPDATA%\vless-eevee`, а не в защищённой папке установки `Program Files`.
 
 На Windows и macOS локальный CRX не устанавливается принудительно в браузер. Для завершения установки расширения используется ручная загрузка распакованной папки либо опубликованная версия Chrome Web Store, если она доступна.
 
