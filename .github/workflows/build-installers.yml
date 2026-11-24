@@ -58,66 +58,9 @@ jobs:
           path: dist/*.msi
           if-no-files-found: error
 
-  macos:
-    runs-on: macos-latest
-    timeout-minutes: 25
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: amd64
-            artifact: installer-macos-amd64
-          - arch: arm64
-            artifact: installer-macos-arm64
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Environment diagnostics
-        run: |
-          set -eux
-          uname -a
-          uname -m
-          sw_vers
-          go version
-          brew --version
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: helper/go.mod
-
-      - name: Install Chrome
-        run: |
-          export HOMEBREW_NO_AUTO_UPDATE=1
-          brew install --cask --verbose google-chrome
-
-      - name: Verify Chrome
-        run: |
-          test -x "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-          echo "Chrome installed successfully"
-
-      - name: Build macOS package
-        run: |
-          set -euxo pipefail
-          echo "Building architecture: ${{ matrix.arch }}"
-          bash -x helper/packaging/build-macos-pkg.sh "${{ matrix.arch }}"
-        env:
-          VLESS_EEVEE_KEY_B64: ${{ secrets.VLESS_EEVEE_KEY_B64 }}
-
-      - name: List artifacts
-        run: |
-          ls -lah dist/
-          file dist/*.pkg
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact }}
-          path: dist/*.pkg
-          if-no-files-found: error
-
   publish:
     if: startsWith(github.ref, 'refs/tags/')
-    needs: [linux, windows, macos]
+    needs: [linux, windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
