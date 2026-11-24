@@ -2,7 +2,7 @@
 
   <img src="extension/icons/icon128.png" width="110" height="110" alt="vless-eevee logo">
 
-  <h1>vless-eevee</h1>
+  <h1>vless-eevee 🦊</h1>
 
   <p>
     <strong>Private proxy. Just for your browser.</strong>
@@ -33,8 +33,6 @@
 
   <br>
 </div> 
-
-# vless-eevee 🦊
 
 **VLESS-прокси для Chrome, Brave и других браузеров на базе Chromium.**
 
