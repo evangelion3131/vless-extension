@@ -1,3 +1,39 @@
+<div align="center">
+
+  <img src="extension/icons/icon128.png" width="110" height="110" alt="vless-eevee logo">
+
+  <h1>vless-eevee</h1>
+
+  <p>
+    <strong>Private proxy. Just for your browser.</strong>
+  </p>
+
+  <p>
+    Лёгкий VLESS-прокси для Chrome, Brave и Chromium.<br>
+    Подключайся к своим серверам прямо из браузера,<br>
+    не затрагивая интернет-соединение остальных приложений.
+  </p>
+
+  <p>
+    <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-8b5cf6?style=flat-square" alt="Platforms">
+    <img src="https://img.shields.io/badge/Browser-Chromium-64748b?style=flat-square" alt="Chromium">
+    <img src="https://img.shields.io/badge/Protocol-VLESS-8b5cf6?style=flat-square" alt="VLESS">
+    <img src="https://img.shields.io/badge/License-Open%20Source-64748b?style=flat-square" alt="Open Source">
+  </p>
+
+  <p>
+    <a href="https://github.com/evangelion3131/vless-extension/releases">
+      <strong>Download</strong>
+    </a>
+    &nbsp;·&nbsp;
+    <a href="#-установка">Установка</a>
+    &nbsp;·&nbsp;
+    <a href="#-как-пользоваться">Инструкция</a>
+  </p>
+
+  <br>
+</div> 
+
 # vless-eevee 🦊
 
 **VLESS-прокси для Chrome, Brave и других браузеров на базе Chromium.**
