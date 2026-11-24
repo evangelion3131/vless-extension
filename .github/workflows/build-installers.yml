@@ -60,11 +60,17 @@ jobs:
 
   publish:
     if: startsWith(github.ref, 'refs/tags/')
+    needs: [linux, windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: installer-*
+          path: dist
+          merge-multiple: true
       - name: Package browser extension
         env:
           TAG: ${{ github.ref_name }}
