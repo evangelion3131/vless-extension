@@ -1,0 +1,96 @@
+#!/bin/sh
+set -eu
+
+install_extension_policy() {
+    browser="$1"
+    case "$browser" in
+        chrome)
+            install -d -m 755 /opt/google/chrome/extensions /usr/share/google-chrome/extensions \
+                /etc/opt/chrome/policies/managed
+            policy_dir=/opt/google/chrome/extensions
+            ;;
+        chromium)
+            install -d -m 755 /usr/share/chromium/extensions /etc/chromium/policies/managed
+            policy_dir=/usr/share/chromium/extensions
+            ;;
+        brave)
+            install -d -m 755 /etc/brave/policies/managed
+            install -d -m 755 /usr/share/brave-browser/extensions
+            policy_dir=/usr/share/brave-browser/extensions
+            ;;
+        *)
+            return 0
+            ;;
+    esac
+
+    if [ "$browser" = chrome ] || [ "$browser" = chromium ] || [ "$browser" = brave ]; then
+        cat > "$policy_dir/pflnlemikfjdffpkadjjemologkalkcl.json" <<'EOF'
+{
+  "external_crx": "/opt/vless-eevee/vless-eevee.crx",
+  "external_version": "0.4.0"
+}
+EOF
+    fi
+}
+
+register_brave_host() {
+    uid="$1"
+    entry="$(getent passwd "$uid" || true)"
+    [ -n "$entry" ] || return 0
+
+    IFS=: read -r _ _ _ gid _ home _ <<EOF
+$entry
+EOF
+    [ -n "$home" ] && [ -d "$home" ] || return 0
+
+    host_dir="$home/.config/BraveSoftware/Brave-Browser/NativeMessagingHosts"
+    install -d -o "$uid" -g "$gid" -m 755 "$host_dir"
+    manifest_tmp="$(mktemp)"
+    cat > "$manifest_tmp" <<'EOF'
+{
+  "name": "com.vless.eevee.helper",
+  "description": "vless-eevee helper",
+  "path": "/opt/vless-eevee/helper",
+  "type": "stdio",
+  "allowed_origins": ["chrome-extension://pflnlemikfjdffpkadjjemologkalkcl/"]
+}
+EOF
+    install -o "$uid" -g "$gid" -m 644 "$manifest_tmp" "$host_dir/com.vless.eevee.helper.json"
+    rm -f "$manifest_tmp"
+}
+
+if [ "$1" = configure ]; then
+    install -d -m 755 /var/lib/vless-eevee
+    cp -f /opt/vless-eevee/vless-eevee.crx /var/lib/vless-eevee/vless-eevee.crx
+    cp -f /opt/vless-eevee/extension-version.txt /var/lib/vless-eevee/extension-version.txt
+
+    systemctl daemon-reload
+    systemctl enable --now vless-eevee-worker.service
+
+    if command -v google-chrome >/dev/null 2>&1 || [ -x /opt/google/chrome/google-chrome ]; then
+        install_extension_policy chrome
+    fi
+    if command -v chromium >/dev/null 2>&1 || command -v chromium-browser >/dev/null 2>&1; then
+        install_extension_policy chromium
+    fi
+    if command -v brave-browser >/dev/null 2>&1; then
+        install_extension_policy brave
+    fi
+
+    install_uid="${PKEXEC_UID:-}"
+    if [ -z "$install_uid" ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ]; then
+        install_uid="$(id -u "$SUDO_USER" 2>/dev/null || true)"
+    fi
+
+    if [ -n "$install_uid" ] && [ "$install_uid" -ge 1000 ]; then
+        register_brave_host "$install_uid"
+    else
+        getent passwd | while IFS=: read -r _ _ uid _ _ home _; do
+            if [ "$uid" -ge 1000 ] && [ -d "$home/.config/BraveSoftware/Brave-Browser" ]; then
+                register_brave_host "$uid"
+            fi
+        done
+    fi
+fi
+
+exit 0

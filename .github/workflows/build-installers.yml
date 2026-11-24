@@ -1,0 +1,81 @@
+name: Build vless-eevee installers
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: helper/go.mod
+      - name: Install Chromium packaging browser
+        run: sudo apt-get update && sudo apt-get install -y chromium-browser
+      - name: Build Debian package
+        run: bash helper/packaging/build-linux-deb.sh "${{ matrix.arch }}"
+        env:
+          VLESS_EEVEE_KEY_B64: ${{ secrets.VLESS_EEVEE_KEY_B64 }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-linux-${{ matrix.arch }}
+          path: dist/*.deb
+          if-no-files-found: error
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: helper/go.mod
+      - name: Install Chrome for CRX packaging
+        shell: pwsh
+        run: choco install googlechrome --no-progress -y --ignore-checksums
+      - name: Install WiX
+        run: dotnet tool install --global wix --version 4.0.5
+      - name: Add WiX to PATH
+        run: echo "$env:USERPROFILE\.dotnet\tools" >> $env:GITHUB_PATH
+      - name: Build MSI
+        shell: pwsh
+        run: ./helper/packaging/build-windows-msi.ps1
+        env:
+          VLESS_EEVEE_KEY_B64: ${{ secrets.VLESS_EEVEE_KEY_B64 }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-windows-x64
+          path: dist/*.msi
+          if-no-files-found: error
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [linux, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: installer-*
+          path: dist
+          merge-multiple: true
+      - name: Create release and upload packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release view "$TAG" --repo "$GH_REPO" >/dev/null 2>&1 || \
+            gh release create "$TAG" --repo "$GH_REPO" --title "$TAG" --generate-notes
+          gh release upload "$TAG" dist/* --repo "$GH_REPO" --clobber

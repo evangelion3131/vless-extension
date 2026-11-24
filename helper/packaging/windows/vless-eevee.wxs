@@ -1,0 +1,78 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+    Name="vless-eevee"
+    Manufacturer="vless-eevee"
+    Version="$(var.AppVersion)"
+    UpgradeCode="{B7E4C2A1-3F5D-4A6E-9C8B-1D2E3F4A5B6C}"
+    Scope="perMachine">
+    <MajorUpgrade DowngradeErrorMessage="A newer version of vless-eevee is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+    <CustomAction
+      Id="StartWorker"
+      FileRef="HelperExe"
+      ExeCommand="-daemon -data-dir &quot;[INSTALLFOLDER]&quot;"
+      Execute="immediate"
+      Impersonate="yes"
+      Return="asyncNoWait" />
+    <CustomAction
+      Id="StopWorker"
+      FileRef="HelperExe"
+      ExeCommand="-stop"
+      Execute="immediate"
+      Impersonate="yes"
+      Return="ignore" />
+    <InstallExecuteSequence>
+      <Custom Action="StartWorker" After="InstallFinalize"
+              Condition="NOT REMOVE" />
+      <Custom Action="StopWorker" Before="RemoveFiles"
+              Condition="REMOVE=&quot;ALL&quot;" />
+    </InstallExecuteSequence>
+
+    <Feature Id="Main" Title="vless-eevee" Level="1">
+      <ComponentGroupRef Id="ApplicationFiles" />
+      <ComponentRef Id="NativeMessagingRegistration" />
+    </Feature>
+  </Package>
+
+  <Fragment>
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="vless-eevee" />
+    </StandardDirectory>
+
+    <ComponentGroup Id="ApplicationFiles" Directory="INSTALLFOLDER">
+      <Component Id="Helper" Guid="*">
+        <File Id="HelperExe" Source="$(var.PayloadDir)\helper.exe" KeyPath="yes" />
+      </Component>
+      <Component Id="Xray" Guid="*">
+        <File Source="$(var.PayloadDir)\xray.exe" KeyPath="yes" />
+      </Component>
+      <Component Id="GeoIP" Guid="*">
+        <File Source="$(var.PayloadDir)\geoip.dat" KeyPath="yes" />
+      </Component>
+      <Component Id="GeoSite" Guid="*">
+        <File Source="$(var.PayloadDir)\geosite.dat" KeyPath="yes" />
+      </Component>
+      <Component Id="ExtensionCRX" Guid="*">
+        <File Source="$(var.PayloadDir)\vless-eevee.crx" KeyPath="yes" />
+      </Component>
+      <Component Id="ExtensionVersion" Guid="*">
+        <File Source="$(var.PayloadDir)\vless-eevee.crx.version" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <Component Id="NativeMessagingRegistration" Directory="INSTALLFOLDER" Guid="*">
+      <File Source="$(var.PayloadDir)\com.vless.eevee.helper.json" KeyPath="yes" />
+      <RegistryKey Root="HKLM" Key="Software\Google\Chrome\NativeMessagingHosts\com.vless.eevee.helper">
+        <RegistryValue
+          Type="string"
+          Value="[INSTALLFOLDER]com.vless.eevee.helper.json" />
+      </RegistryKey>
+      <RegistryKey Root="HKLM" Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Run">
+        <RegistryValue
+          Type="string"
+          Name="vless-eevee-worker"
+          Value="&quot;[INSTALLFOLDER]helper.exe&quot; -daemon -data-dir &quot;[INSTALLFOLDER]&quot;" />
+      </RegistryKey>
+    </Component>
+  </Fragment>
+</Wix>

@@ -1,0 +1,37 @@
+#!/bin/sh
+set -eu
+
+remove_extension_policies() {
+    rm -f \
+        /opt/google/chrome/extensions/pflnlemikfjdffpkadjjemologkalkcl.json \
+        /usr/share/google-chrome/extensions/pflnlemikfjdffpkadjjemologkalkcl.json \
+        /usr/share/chromium/extensions/pflnlemikfjdffpkadjjemologkalkcl.json \
+        /usr/share/brave-browser/extensions/pflnlemikfjdffpkadjjemologkalkcl.json
+}
+
+remove_brave_host() {
+    uid="$1"
+    entry="$(getent passwd "$uid" || true)"
+    [ -n "$entry" ] || return 0
+    IFS=: read -r _ _ _ _ _ home _ <<EOF
+$entry
+EOF
+    manifest="$home/.config/BraveSoftware/Brave-Browser/NativeMessagingHosts/com.vless.eevee.helper.json"
+    if [ -f "$manifest" ] && grep -Fq '"path": "/opt/vless-eevee/helper"' "$manifest"; then
+        rm -f "$manifest"
+    fi
+}
+
+if [ "$1" = remove ] || [ "$1" = deinstall ]; then
+    systemctl disable --now vless-eevee-worker.service >/dev/null 2>&1 || true
+    systemctl reset-failed vless-eevee-worker.service >/dev/null 2>&1 || true
+    rm -f /var/lib/vless-eevee/vless-eevee.crx /var/lib/vless-eevee/extension-version.txt
+    remove_extension_policies
+    getent passwd | while IFS=: read -r _ _ uid _ _ home _; do
+        if [ "$uid" -ge 1000 ]; then
+            remove_brave_host "$uid"
+        fi
+    done
+fi
+
+exit 0
