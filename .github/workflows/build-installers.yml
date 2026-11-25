@@ -85,5 +85,6 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           gh release view "$TAG" --repo "$GH_REPO" >/dev/null 2>&1 || \
-            gh release create "$TAG" --repo "$GH_REPO" --title "$TAG" --generate-notes
+            gh release create "$TAG" --repo "$GH_REPO" --title "$TAG" \
+              --notes "Исправлено переключение серверов и синхронизация между профилями."
           gh release upload "$TAG" dist/* --repo "$GH_REPO" --clobber

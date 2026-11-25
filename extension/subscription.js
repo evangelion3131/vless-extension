@@ -20,18 +20,15 @@ function isXrayConfig(o) {
 // blackhole = блокировка, dns = перехват DNS).
 const SERVICE = new Set(["freedom", "blackhole", "dns", "loopback"]);
 
-function mainOutbound(config) {
-  return config.outbounds.find((o) => o && !SERVICE.has(o.protocol)) || null;
+function outboundNodes(outbound) {
+  const settings = outbound.settings || {};
+  if (Array.isArray(settings.vnext)) return { key: "vnext", nodes: settings.vnext };
+  if (Array.isArray(settings.servers)) return { key: "servers", nodes: settings.servers };
+  return { key: null, nodes: [] };
 }
 
-// Достаём адрес/порт/uuid из outbound — структура зависит от протокола.
-function outboundEndpoint(ob) {
-  const s = ob.settings || {};
-  const node =
-    s.vnext?.[0] ||       // vless, vmess
-    s.servers?.[0] ||     // trojan, shadowsocks
-    null;
-  if (!node) return null;
+// Достаём адрес/порт/uuid из сервера outbound — структура зависит от протокола.
+function outboundEndpoint(ob, node) {
   return {
     host: node.address || "",
     port: Number(node.port) || 0,
@@ -39,28 +36,40 @@ function outboundEndpoint(ob) {
   };
 }
 
-function serverFromConfig(config, idx) {
-  const ob = mainOutbound(config);
-  if (!ob) return null;
-  const ep = outboundEndpoint(ob);
-  if (!ep || !ep.host) return null;
+function serversFromConfig(config) {
+  const servers = [];
+  config.outbounds.forEach((ob, outboundIndex) => {
+    if (!ob || SERVICE.has(ob.protocol)) return;
+    const { key, nodes } = outboundNodes(ob);
+    nodes.forEach((node, nodeIndex) => {
+      const ep = outboundEndpoint(ob, node);
+      if (!ep.host) return;
 
-  const stream = ob.streamSettings || {};
-  // имя: remarks (v2rayN), tag аутбаунда, иначе адрес
-  const name =
-    config.remarks || config.name || ob.tag || `${ep.host}:${ep.port}` || `Сервер ${idx + 1}`;
+      const stream = ob.streamSettings || {};
+      const endpointName = `${ep.host}:${ep.port}`;
+      const outboundName = ob.tag || config.remarks || config.name || endpointName;
+      const name = nodes.length > 1
+        ? `${outboundName} · ${endpointName}`
+        : outboundName;
 
-  return {
-    kind: "config",          // помечаем: запускается из готового конфига
-    name: String(name),
-    protocol: ob.protocol || "?",
-    host: ep.host,
-    port: ep.port,
-    uuid: ep.uuid,
-    network: stream.network || "tcp",
-    security: stream.security || "none",
-    config                    // полный конфиг xray — отдадим helper'у как есть
-  };
+      servers.push({
+        kind: "config",
+        name: String(name),
+        protocol: ob.protocol || "?",
+        host: ep.host,
+        port: ep.port,
+        uuid: ep.uuid,
+        network: stream.network || "tcp",
+        security: stream.security || "none",
+        outboundTag: ob.tag || "",
+        outboundIndex,
+        nodeKey: key,
+        nodeIndex,
+        config
+      });
+    });
+  });
+  return servers;
 }
 
 // --- B) список ссылок ---
@@ -120,7 +129,7 @@ export async function fetchSubscription(url) {
     const configs = Array.isArray(json) ? json : [json];
     const valid = configs.filter(isXrayConfig);
     if (valid.length) {
-      const servers = valid.map(serverFromConfig, undefined).filter(Boolean);
+      const servers = valid.flatMap(serversFromConfig);
       if (!servers.length) {
         throw new Error("конфиг xray получен, но в нём нет рабочего outbound'а");
       }

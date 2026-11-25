@@ -1,11 +1,13 @@
 package main
 
 import (
+	"encoding/json"
 	"net"
 	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 )
 
 func TestWorkDirUsesUserConfigDirectory(t *testing.T) {
@@ -57,5 +59,74 @@ func TestDaemonRejectsSecondListener(t *testing.T) {
 	got := runDaemon()
 	if got == nil {
 		t.Fatal("runDaemon() unexpectedly started a second worker")
+	}
+}
+
+func TestStopKeepsSharedTunnelUntilLastClientDisconnects(t *testing.T) {
+	oldPort, oldCmd, oldDone := xrayPort, xrayCmd, xrayDone
+	oldClients, oldServer, oldKey := activeClients, activeServer, activeKey
+	t.Cleanup(func() {
+		xrayPort, xrayCmd, xrayDone = oldPort, oldCmd, oldDone
+		activeClients, activeServer, activeKey = oldClients, oldServer, oldKey
+	})
+
+	xrayCmd, xrayDone = nil, nil
+	xrayPort = 1080
+	activeClients = map[string]time.Time{
+		"profile-a": time.Now(),
+		"profile-b": time.Now(),
+	}
+	activeServer = &serverMetadata{Name: "Current", Host: "example.com", Port: 443, Protocol: "vless"}
+	activeKey = "shared"
+
+	res := handle(request{ID: 1, Cmd: "stop", ClientID: "profile-a"})
+	if !res.OK || res.ClientConnected || res.Port != 1080 || res.Server == nil {
+		t.Fatalf("first stop response = %+v, want shared connection retained", res)
+	}
+	if _, active := activeClients["profile-b"]; !active {
+		t.Fatal("other profile was disconnected")
+	}
+
+	res = handle(request{ID: 2, Cmd: "stop", ClientID: "profile-b"})
+	if !res.OK || res.Port != 0 || res.Server != nil {
+		t.Fatalf("last stop response = %+v, want tunnel stopped", res)
+	}
+}
+
+func TestStartingSameConfigReusesSharedTunnel(t *testing.T) {
+	oldPort, oldCmd, oldDone := xrayPort, xrayCmd, xrayDone
+	oldClients, oldServer, oldKey := activeClients, activeServer, activeKey
+	t.Cleanup(func() {
+		xrayPort, xrayCmd, xrayDone = oldPort, oldCmd, oldDone
+		activeClients, activeServer, activeKey = oldClients, oldServer, oldKey
+	})
+
+	req := request{
+		ID:       1,
+		Cmd:      "start",
+		ClientID: "profile-b",
+		Config:   json.RawMessage(`{"outbounds":[{"protocol":"vless"}]}`),
+		Server:   &serverMetadata{Name: "Same server", Host: "example.com", Port: 443, Protocol: "vless"},
+	}
+	xrayCmd, xrayDone = nil, nil
+	xrayPort = 1080
+	activeClients = map[string]time.Time{"profile-a": time.Now()}
+	activeServer = &serverMetadata{Name: "Previous label", Host: "example.com", Port: 443, Protocol: "vless"}
+	activeKey = connectionKey(req)
+
+	res := handle(req)
+	if !res.OK || !res.ClientConnected || res.Port != 1080 {
+		t.Fatalf("start response = %+v, want existing tunnel reused", res)
+	}
+	if _, active := activeClients["profile-a"]; !active {
+		t.Fatal("starting the same server disconnected the first profile")
+	}
+	if res.Server == nil || res.Server.Name != "Same server" {
+		t.Fatalf("server metadata = %+v, want new display name", res.Server)
+	}
+
+	res = handle(request{ID: 2, Cmd: "status", ClientID: "profile-a"})
+	if !res.ClientConnected || res.Server == nil || res.Server.Name != "Same server" {
+		t.Fatalf("other profile status = %+v, want synchronized server", res)
 	}
 }

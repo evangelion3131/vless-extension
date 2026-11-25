@@ -40,7 +40,7 @@ func localSocksInbound() map[string]any {
 //     и может быть занят другим клиентом;
 //   - конфиг может открывать лишние inbound'ы (http-прокси, api), которые
 //     нам не нужны и лишний раз слушают порты.
-func adoptConfig(raw []byte) (*xrayConfig, error) {
+func adoptConfig(raw []byte, selected *serverMetadata) (*xrayConfig, error) {
 	var root map[string]any
 	if err := json.Unmarshal(raw, &root); err != nil {
 		return nil, fmt.Errorf("не удалось разобрать JSON: %w", err)
@@ -49,6 +49,9 @@ func adoptConfig(raw []byte) (*xrayConfig, error) {
 	obs, ok := root["outbounds"].([]any)
 	if !ok || len(obs) == 0 {
 		return nil, fmt.Errorf("в конфиге нет outbounds")
+	}
+	if err := selectConfigOutbound(root, selected); err != nil {
+		return nil, err
 	}
 
 	root["inbounds"] = []any{localSocksInbound()}
@@ -61,6 +64,145 @@ func adoptConfig(raw []byte) (*xrayConfig, error) {
 	stripAPIRoutingRules(root)
 
 	return &xrayConfig{root: root}, nil
+}
+
+var serviceOutboundProtocols = map[string]bool{
+	"freedom":   true,
+	"blackhole": true,
+	"dns":       true,
+	"loopback":  true,
+}
+
+func selectConfigOutbound(root map[string]any, selected *serverMetadata) error {
+	if selected == nil {
+		return nil
+	}
+	outbounds, ok := root["outbounds"].([]any)
+	if !ok || len(outbounds) == 0 {
+		return fmt.Errorf("в конфиге нет outbounds")
+	}
+
+	var outboundIndex int
+	if selected.OutboundIndex != nil {
+		outboundIndex = *selected.OutboundIndex
+		if outboundIndex < 0 || outboundIndex >= len(outbounds) {
+			return fmt.Errorf("выбранный outbound отсутствует в конфиге")
+		}
+	} else {
+		outboundIndex = findSelectedOutbound(outbounds, selected)
+		if outboundIndex < 0 {
+			return fmt.Errorf("выбранный сервер отсутствует в конфиге")
+		}
+	}
+
+	outbound, ok := outbounds[outboundIndex].(map[string]any)
+	if !ok {
+		return fmt.Errorf("выбранный outbound имеет неверный формат")
+	}
+	protocol, _ := outbound["protocol"].(string)
+	if serviceOutboundProtocols[protocol] {
+		return fmt.Errorf("выбранный outbound является служебным")
+	}
+
+	if selected.NodeIndex != nil {
+		settings, ok := outbound["settings"].(map[string]any)
+		if !ok {
+			return fmt.Errorf("у выбранного outbound нет настроек")
+		}
+		nodeKey := selected.NodeKey
+		if nodeKey == "" {
+			switch {
+			case settings["vnext"] != nil:
+				nodeKey = "vnext"
+			case settings["servers"] != nil:
+				nodeKey = "servers"
+			default:
+				return fmt.Errorf("у выбранного outbound нет списка серверов")
+			}
+		}
+		nodes, ok := settings[nodeKey].([]any)
+		if !ok || *selected.NodeIndex < 0 || *selected.NodeIndex >= len(nodes) {
+			return fmt.Errorf("выбранный сервер отсутствует в outbound")
+		}
+		settings[nodeKey] = []any{nodes[*selected.NodeIndex]}
+	}
+
+	selectedTag, _ := outbound["tag"].(string)
+	if selectedTag == "" {
+		selectedTag = "vless-eevee-selected"
+		outbound["tag"] = selectedTag
+	}
+
+	proxyTags := make(map[string]bool)
+	for _, rawOutbound := range outbounds {
+		entry, ok := rawOutbound.(map[string]any)
+		if !ok {
+			continue
+		}
+		tag, _ := entry["tag"].(string)
+		protocol, _ := entry["protocol"].(string)
+		if tag != "" && !serviceOutboundProtocols[protocol] {
+			proxyTags[tag] = true
+		}
+	}
+	proxyTags[selectedTag] = true
+	selectConfigRoutingOutbound(root, selectedTag, proxyTags)
+
+	if outboundIndex > 0 {
+		outbounds = append([]any{outbound}, append(outbounds[:outboundIndex], outbounds[outboundIndex+1:]...)...)
+		root["outbounds"] = outbounds
+	}
+	return nil
+}
+
+func findSelectedOutbound(outbounds []any, selected *serverMetadata) int {
+	for i, rawOutbound := range outbounds {
+		outbound, ok := rawOutbound.(map[string]any)
+		if !ok {
+			continue
+		}
+		tag, _ := outbound["tag"].(string)
+		if selected.OutboundTag != "" && tag != selected.OutboundTag {
+			continue
+		}
+		settings, _ := outbound["settings"].(map[string]any)
+		for _, nodeKey := range []string{"vnext", "servers"} {
+			nodes, _ := settings[nodeKey].([]any)
+			for _, rawNode := range nodes {
+				node, _ := rawNode.(map[string]any)
+				address, _ := node["address"].(string)
+				port, _ := node["port"].(float64)
+				if address == selected.Host && int(port) == selected.Port {
+					return i
+				}
+			}
+		}
+	}
+	return -1
+}
+
+func selectConfigRoutingOutbound(root map[string]any, selectedTag string, proxyTags map[string]bool) {
+	routing, ok := root["routing"].(map[string]any)
+	if !ok {
+		return
+	}
+	rules, ok := routing["rules"].([]any)
+	if !ok {
+		return
+	}
+	for _, rawRule := range rules {
+		rule, ok := rawRule.(map[string]any)
+		if !ok {
+			continue
+		}
+		if tag, _ := rule["outboundTag"].(string); proxyTags[tag] {
+			rule["outboundTag"] = selectedTag
+		}
+		if _, ok := rule["balancerTag"].(string); ok {
+			delete(rule, "balancerTag")
+			rule["outboundTag"] = selectedTag
+		}
+	}
 }
 
 // stripAPIRoutingRules убирает routing-правила, ведущие на несуществующий

@@ -65,7 +65,8 @@ if [ "$1" = configure ]; then
     cp -f /opt/vless-eevee/extension-version.txt /var/lib/vless-eevee/extension-version.txt
 
     systemctl daemon-reload
-    systemctl enable --now vless-eevee-worker.service
+    systemctl enable vless-eevee-worker.service
+    systemctl restart vless-eevee-worker.service
 
     if command -v google-chrome >/dev/null 2>&1 || [ -x /opt/google/chrome/google-chrome ]; then
         install_extension_policy chrome

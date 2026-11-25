@@ -32,6 +32,7 @@ let servers = [];
 let selectedIdx = -1;
 let subscription = null; // { url, updatedAt }
 let connected = false;
+let activeServer = null;
 let busy = false;
 let latencies = new Map(); // serverKey -> { state: "measuring"|"done"|"error", ms?, err? }
 let pingingAll = false;    // идёт замер всех серверов по очереди
@@ -68,6 +69,7 @@ async function enterApp() {
   selectedIdx = data.selectedIdx ?? (servers.length ? 0 : -1);
   subscription = data.subscription || null;
   connected = !!data.state?.connected;
+  activeServer = data.state?.server || null;
   if (data.state?.error) errorLine.textContent = data.state.error;
   render();
 }
@@ -121,7 +123,9 @@ function render() {
 
   heroStatus.textContent = busy ? "Подождите…" : connected ? "Подключено" : "Не подключено";
   heroStatus.classList.toggle("on", connected && !busy);
-  const cur = selectedIdx >= 0 ? servers[selectedIdx] : null;
+  const cur = connected && activeServer
+    ? activeServer
+    : selectedIdx >= 0 ? servers[selectedIdx] : null;
   heroName.textContent = cur ? cur.name : "Сервер не выбран";
   heroMeta.textContent = cur ? `${cur.host}:${cur.port}` : "Добавьте подписку справа";
 
@@ -146,9 +150,12 @@ function render() {
       `<div class="empty">Серверов пока нет — вставьте ссылку-подписку или vless:// выше</div>`;
     return;
   }
+  const activeIdx = connected && activeServer
+    ? servers.findIndex((server) => sameServer(server, activeServer))
+    : selectedIdx;
   servers.forEach((s, i) => {
     const el = document.createElement("div");
-    el.className = "server" + (i === selectedIdx ? " selected" : "");
+    el.className = "server" + (i === activeIdx ? " selected" : "");
     el.innerHTML = `
       <span class="radio"></span>
       <div class="info">
@@ -196,6 +203,13 @@ function render() {
 
 function serverKey(s) {
   return `${s.protocol || "vless"}|${s.host}|${s.port}|${s.uuid || s.name}`;
+}
+
+function sameServer(a, b) {
+  return !!a && !!b &&
+    (a.protocol || "vless") === (b.protocol || "vless") &&
+    a.host === b.host &&
+    Number(a.port) === Number(b.port);
 }
 
 // Замер одного сервера. Не блокирует UI: помечаем «…», ждём helper, рисуем результат.
@@ -258,6 +272,21 @@ function shortUrl(u) {
 async function persist() {
   await chrome.storage.local.set({ servers, selectedIdx, subscription });
 }
+
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== "local") return;
+  if (changes.servers) servers = changes.servers.newValue || [];
+  if (changes.selectedIdx) selectedIdx = changes.selectedIdx.newValue ?? -1;
+  if (changes.subscription) subscription = changes.subscription.newValue || null;
+  if (changes.state) {
+    const state = changes.state.newValue || {};
+    connected = !!state.connected;
+    activeServer = state.server || null;
+    if (state.error) errorLine.textContent = state.error;
+    else errorLine.textContent = "";
+  }
+  render();
+});
 
 addBtn.addEventListener("click", addFromInput);
 linkInput.addEventListener("keydown", (e) => { if (e.key === "Enter") addFromInput(); });
@@ -323,14 +352,48 @@ async function loadSubscription(url, isRefresh) {
 }
 
 async function selectServer(i) {
-  if (connected || busy) return;
+  if (busy) return;
   selectedIdx = i;
   await persist();
+  if (connected) {
+    errorLine.textContent = "";
+    busy = true;
+    render();
+    try {
+      const srv = servers[i];
+      const res = await chrome.runtime.sendMessage(
+        srv.kind === "config"
+          ? { cmd: "connect", config: srv.config, server: serverMetadata(srv) }
+          : { cmd: "connect", link: srv.raw, server: serverMetadata(srv) }
+      );
+      if (!res?.ok) errorLine.textContent = res?.error || "не удалось подключиться";
+    } finally {
+      busy = false;
+      render();
+    }
+    return;
+  }
   render();
 }
 
+function serverMetadata(server) {
+  return {
+    name: server.name,
+    host: server.host,
+    port: server.port,
+    protocol: server.protocol || "vless",
+    outboundTag: server.outboundTag,
+    outboundIndex: server.outboundIndex,
+    nodeKey: server.nodeKey,
+    nodeIndex: server.nodeIndex
+  };
+}
+
 async function removeServer(i) {
-  if (connected && i === selectedIdx) return;
+  if (
+    connected &&
+    (sameServer(servers[i], activeServer) || (!activeServer && i === selectedIdx))
+  ) return;
   servers.splice(i, 1);
   if (selectedIdx >= servers.length) selectedIdx = servers.length - 1;
   await persist();
@@ -346,14 +409,20 @@ toggleBtn.addEventListener("click", async () => {
       const srv = servers[selectedIdx];
       const res = await chrome.runtime.sendMessage(
         srv?.kind === "config"
-          ? { cmd: "connect", config: srv.config }
-          : { cmd: "connect", link: srv?.raw }
+          ? { cmd: "connect", config: srv.config, server: serverMetadata(srv) }
+          : { cmd: "connect", link: srv?.raw, server: serverMetadata(srv) }
       );
-      if (res?.ok) connected = true;
-      else errorLine.textContent = res?.error || "не удалось подключиться";
+      if (res?.ok) {
+        connected = true;
+        activeServer = res.server || serverMetadata(srv);
+      } else {
+        errorLine.textContent = res?.error || "не удалось подключиться";
+      }
     } else {
-      await chrome.runtime.sendMessage({ cmd: "disconnect" });
+      const res = await chrome.runtime.sendMessage({ cmd: "disconnect" });
       connected = false;
+      activeServer = res?.server || activeServer;
+      if (!res?.ok) errorLine.textContent = res?.error || "не удалось отключиться";
     }
   } finally {
     busy = false;

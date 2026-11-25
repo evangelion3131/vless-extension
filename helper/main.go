@@ -8,7 +8,10 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,31 +25,51 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
 type request struct {
-	ID     int             `json:"id"`
-	Cmd    string          `json:"cmd"`
-	Link   string          `json:"link,omitempty"`   // vless:// ссылка
-	Config json.RawMessage `json:"config,omitempty"` // готовый конфиг xray
-	URL    string          `json:"url,omitempty"`    // адрес подписки для fetchSub
+	ID       int             `json:"id"`
+	Cmd      string          `json:"cmd"`
+	Link     string          `json:"link,omitempty"`   // vless:// ссылка
+	Config   json.RawMessage `json:"config,omitempty"` // готовый конфиг xray
+	URL      string          `json:"url,omitempty"`    // адрес подписки для fetchSub
+	ClientID string          `json:"clientId,omitempty"`
+	Server   *serverMetadata `json:"server,omitempty"`
+}
+
+type serverMetadata struct {
+	Name          string `json:"name"`
+	Host          string `json:"host"`
+	Port          int    `json:"port"`
+	Protocol      string `json:"protocol"`
+	OutboundTag   string `json:"outboundTag,omitempty"`
+	OutboundIndex *int   `json:"outboundIndex,omitempty"`
+	NodeKey       string `json:"nodeKey,omitempty"`
+	NodeIndex     *int   `json:"nodeIndex,omitempty"`
 }
 
 type response struct {
-	ID    int    `json:"id"`
-	OK    bool   `json:"ok"`
-	Port  int    `json:"port,omitempty"`
-	Error string `json:"error,omitempty"`
-	State string `json:"state,omitempty"`
-	Body  string `json:"body,omitempty"` // тело ответа подписки (fetchSub)
-	MS    int    `json:"ms,omitempty"`   // задержка через туннель, мс (latency)
+	ID              int             `json:"id"`
+	OK              bool            `json:"ok"`
+	Port            int             `json:"port,omitempty"`
+	Error           string          `json:"error,omitempty"`
+	State           string          `json:"state,omitempty"`
+	ClientConnected bool            `json:"clientConnected"`
+	Server          *serverMetadata `json:"server,omitempty"`
+	Body            string          `json:"body,omitempty"` // тело ответа подписки (fetchSub)
+	MS              int             `json:"ms,omitempty"`   // задержка через туннель, мс (latency)
 }
 
 var (
-	xrayCmd  *exec.Cmd
-	xrayPort int
-	xrayDone chan struct{} // закрывается, когда cmd.Wait() для xrayCmd завершился
+	xrayCmd       *exec.Cmd
+	xrayPort      int
+	xrayDone      chan struct{} // закрывается, когда cmd.Wait() для xrayCmd завершился
+	handleMu      sync.Mutex
+	activeClients = make(map[string]time.Time)
+	activeServer  *serverMetadata
+	activeKey     string
 )
 
 func main() {
@@ -74,17 +97,31 @@ func main() {
 		}
 		return
 	}
+	clientID, err := newClientID()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return
+	}
+	usingDaemon := false
 	for {
 		req, err := readMessage(os.Stdin)
 		if err != nil {
 			if err == io.EOF {
-				stopXray()
+				if usingDaemon {
+					_, _ = callDaemon(request{Cmd: "release", ClientID: clientID})
+				} else {
+					stopXray()
+				}
 				return
 			}
 			continue
 		}
+		req.ClientID = clientID
 		resp, ok := callDaemon(req)
-		if !ok {
+		if ok {
+			usingDaemon = true
+		} else {
+			usingDaemon = false
 			resp = handle(req)
 		}
 		writeMessage(os.Stdout, resp)
@@ -94,6 +131,15 @@ func main() {
 var workerDataDir string
 
 const workerAddress = "127.0.0.1:17837"
+const clientTimeout = 30 * time.Second
+
+func newClientID() (string, error) {
+	var id [16]byte
+	if _, err := rand.Read(id[:]); err != nil {
+		return "", fmt.Errorf("создание идентификатора клиента: %w", err)
+	}
+	return hex.EncodeToString(id[:]), nil
+}
 
 func callDaemon(req request) (response, bool) {
 	data, err := json.Marshal(req)
@@ -190,21 +236,11 @@ func readExtensionVersion(dir string) (string, error) {
 
 func handle(req request) response {
 	switch req.Cmd {
-	case "start":
-		port, err := startXray(req.Link, req.Config)
-		if err != nil {
-			return response{ID: req.ID, OK: false, Error: err.Error()}
-		}
-		return response{ID: req.ID, OK: true, Port: port}
-	case "stop":
-		stopXray()
-		return response{ID: req.ID, OK: true}
-	case "status":
-		state := "stopped"
-		if xrayCmd != nil && xrayCmd.Process != nil {
-			state = "running"
-		}
-		return response{ID: req.ID, OK: true, State: state, Port: xrayPort}
+	case "start", "stop", "status", "release":
+		handleMu.Lock()
+		defer handleMu.Unlock()
+		expireClients()
+		return handleConnectionRequest(req)
 	case "fetchSub":
 		body, err := fetchSub(req.URL)
 		if err != nil {
@@ -220,6 +256,133 @@ func handle(req request) response {
 	default:
 		return response{ID: req.ID, OK: false, Error: "unknown command: " + req.Cmd}
 	}
+}
+
+func handleConnectionRequest(req request) response {
+	clientID := req.ClientID
+	if clientID == "" {
+		clientID = "local"
+	}
+
+	switch req.Cmd {
+	case "start":
+		key := connectionKey(req)
+		port := xrayPort
+		if port == 0 || key != activeKey {
+			var err error
+			port, err = startXray(req.Link, req.Config, req.Server)
+			if err != nil {
+				activeClients = make(map[string]time.Time)
+				activeServer = nil
+				activeKey = ""
+				stopXray()
+				return response{ID: req.ID, OK: false, Error: err.Error()}
+			}
+			activeKey = key
+		}
+		if req.Server != nil {
+			server := *req.Server
+			activeServer = &server
+		}
+		activeClients[clientID] = time.Now()
+		return connectionStatus(req.ID, clientID, true)
+	case "stop", "release":
+		delete(activeClients, clientID)
+		if len(activeClients) == 0 {
+			stopXray()
+			activeServer = nil
+			activeKey = ""
+		}
+		return connectionStatus(req.ID, clientID, true)
+	case "status":
+		if _, active := activeClients[clientID]; active {
+			activeClients[clientID] = time.Now()
+		}
+		return connectionStatus(req.ID, clientID, true)
+	default:
+		return response{ID: req.ID, OK: false, Error: "unknown connection command: " + req.Cmd}
+	}
+}
+
+func connectionStatus(id int, clientID string, ok bool) response {
+	state := "stopped"
+	if xrayPort > 0 {
+		state = "running"
+	}
+	_, clientConnected := activeClients[clientID]
+	return response{
+		ID:              id,
+		OK:              ok,
+		Port:            xrayPort,
+		State:           state,
+		ClientConnected: clientConnected,
+		Server:          activeServer,
+	}
+}
+
+func expireClients() {
+	now := time.Now()
+	for id, lastSeen := range activeClients {
+		if now.Sub(lastSeen) > clientTimeout {
+			delete(activeClients, id)
+		}
+	}
+	if xrayExited() {
+		activeClients = make(map[string]time.Time)
+	}
+	if len(activeClients) == 0 && xrayPort != 0 {
+		stopXray()
+		activeServer = nil
+		activeKey = ""
+	}
+}
+
+func xrayExited() bool {
+	if xrayCmd == nil || xrayDone == nil {
+		return false
+	}
+	select {
+	case <-xrayDone:
+		return true
+	default:
+		return false
+	}
+}
+
+func connectionKey(req request) string {
+	data := req.Config
+	if len(data) > 0 {
+		var config any
+		if json.Unmarshal(data, &config) == nil {
+			if normalized, err := json.Marshal(config); err == nil {
+				data = normalized
+			}
+		}
+	} else {
+		data = []byte(strings.TrimSpace(req.Link))
+	}
+	var selected any
+	if req.Server != nil {
+		selected = struct {
+			OutboundTag   string `json:"outboundTag,omitempty"`
+			OutboundIndex *int   `json:"outboundIndex,omitempty"`
+			NodeKey       string `json:"nodeKey,omitempty"`
+			NodeIndex     *int   `json:"nodeIndex,omitempty"`
+			Host          string `json:"host,omitempty"`
+			Port          int    `json:"port,omitempty"`
+		}{
+			OutboundTag:   req.Server.OutboundTag,
+			OutboundIndex: req.Server.OutboundIndex,
+			NodeKey:       req.Server.NodeKey,
+			NodeIndex:     req.Server.NodeIndex,
+			Host:          req.Server.Host,
+			Port:          req.Server.Port,
+		}
+	}
+	identity, _ := json.Marshal(selected)
+	data = append(data, identity...)
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
 }
 
 // --- subscription fetch ---
@@ -264,7 +427,7 @@ func measureLatency(link string, raw json.RawMessage) (int, error) {
 	var cfg *xrayConfig
 	var err error
 	if len(raw) > 0 {
-		cfg, err = adoptConfig(raw)
+		cfg, err = adoptConfig(raw, nil)
 	} else {
 		cfg, err = buildConfig(link)
 	}
@@ -426,7 +589,8 @@ func shortTail(log *bytes.Buffer) string {
 
 // --- xray management ---
 
-func startXray(link string, raw json.RawMessage) (int, error) {
+func startXray(link string, raw json.RawMessage, selected *serverMetadata) (int, error) {
+	preferredPort := xrayPort
 	stopXray()
 
 	var cfg *xrayConfig
@@ -434,7 +598,7 @@ func startXray(link string, raw json.RawMessage) (int, error) {
 	if len(raw) > 0 {
 		// Подписка отдала готовый конфиг xray — используем его как есть,
 		// подменив только inbound на наш локальный SOCKS.
-		cfg, err = adoptConfig(raw)
+		cfg, err = adoptConfig(raw, selected)
 		if err != nil {
 			return 0, fmt.Errorf("конфиг из подписки: %w", err)
 		}
@@ -445,9 +609,12 @@ func startXray(link string, raw json.RawMessage) (int, error) {
 		}
 	}
 
-	port, err := freePort()
-	if err != nil {
-		return 0, fmt.Errorf("не найден свободный порт: %w", err)
+	port := preferredPort
+	if port == 0 {
+		port, err = freePort()
+		if err != nil {
+			return 0, fmt.Errorf("не найден свободный порт: %w", err)
+		}
 	}
 	cfg.setInboundPort(port)
 

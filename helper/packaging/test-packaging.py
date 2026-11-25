@@ -41,6 +41,8 @@ postinst = (ROOT / "helper/packaging/linux/postinst").read_text()
 prerm = (ROOT / "helper/packaging/linux/prerm").read_text()
 if "vless-eevee-worker.service" not in postinst:
     fail("Linux post-install does not start Worker")
+if "systemctl restart vless-eevee-worker.service" not in postinst:
+    fail("Linux post-install does not restart an already running Worker")
 if "disable --now vless-eevee-worker.service" not in prerm:
     fail("Linux removal does not stop Worker")
 
