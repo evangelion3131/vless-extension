@@ -33,3 +33,6 @@ sub.json
 dist/
 backup-*/
 scratchpad/
+
+# ключ подписи расширения
+*.pem
