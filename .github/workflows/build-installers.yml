@@ -78,7 +78,7 @@ jobs:
           merge-multiple: true
       - name: Package browser extension
         env:
-          TAG: ${{ github.ref_type == 'tag' && github.ref_name || inputs.release_tag }}
+          TAG: ${{ inputs.release_tag || github.ref_name }}
         run: |
           mkdir -p dist
           for package in dist/*.deb; do
