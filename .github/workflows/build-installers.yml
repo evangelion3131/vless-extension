@@ -5,6 +5,11 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Existing or new release tag to update (for example v1.1.0)"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -59,7 +64,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    if: startsWith(github.ref, 'refs/tags/')
+    if: startsWith(github.ref, 'refs/tags/') || inputs.release_tag != ''
     needs: [linux, windows]
     runs-on: ubuntu-latest
     permissions:
@@ -73,11 +78,17 @@ jobs:
           merge-multiple: true
       - name: Package browser extension
         env:
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ github.ref_type == 'tag' && github.ref_name || inputs.release_tag }}
         run: |
-          VERSION="${TAG#v}"
           mkdir -p dist
-          (cd extension && zip -r "../dist/extension-v${VERSION}.zip" .)
+          for package in dist/*.deb; do
+            architecture="$(dpkg-deb -f "$package" Architecture)"
+            mv "$package" "dist/vless-eevee.linux.${architecture}.deb"
+          done
+          for package in dist/*.msi; do
+            mv "$package" dist/vless-eevee.windows.x64.msi
+          done
+          (cd extension && zip -r "../dist/vless-eevee.extension.zip" .)
       - name: Create release and upload packages
         env:
           GH_TOKEN: ${{ github.token }}
