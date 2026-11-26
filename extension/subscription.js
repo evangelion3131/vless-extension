@@ -2,12 +2,71 @@ import { parseVless } from "./vless.js";
 
 // Подписка (subscription URL). Провайдеры отдают её в разных форматах:
 //   A) full config — готовый JSON-конфиг xray (dns/inbounds/outbounds/routing).
-//      Может быть одним объектом или массивом объектов (несколько серверов).
+//      Именованные конфиги сохраняются как целые профили; безымянные делятся
+//      на отдельные серверы по outbound'ам.
 //   B) список ссылок — base64 (обычный или URL-safe) либо plain text построчно.
 // Определяем формат по содержимому.
+//
+// Кроме серверов из ответа берём метаданные (как в Happ):
+//   profile-title          — название подписки (текст или "base64:...")
+//   subscription-userinfo  — "upload=..; download=..; total=..; expire=.."
 
 export function isSubscriptionUrl(s) {
   return /^https?:\/\//i.test((s || "").trim());
+}
+
+// --- метаданные из заголовков ---
+
+function headerValue(headers, name) {
+  if (!headers || typeof headers !== "object") return "";
+  for (const [k, v] of Object.entries(headers)) {
+    if (k.toLowerCase() === name) return Array.isArray(v) ? v.join(", ") : String(v ?? "");
+  }
+  return "";
+}
+
+function decodeBase64Utf8(b64) {
+  let s = b64.replace(/\s+/g, "").replace(/-/g, "+").replace(/_/g, "/");
+  while (s.length % 4) s += "=";
+  const bin = atob(s);
+  const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+  return new TextDecoder("utf-8").decode(bytes);
+}
+
+export function parseTitle(raw) {
+  if (!raw) return "";
+  let v = String(raw).trim();
+  if (/^base64:/i.test(v)) {
+    try { v = decodeBase64Utf8(v.slice(7)); } catch { return ""; }
+  } else if (/%[0-9a-f]{2}/i.test(v)) {
+    try { v = decodeURIComponent(v); } catch { /* оставляем как есть */ }
+  }
+  return v.trim().slice(0, 80);
+}
+
+// → { used, total, expire } | null. total=0 — без лимита, expire=0 — бессрочно.
+export function parseUserInfo(raw) {
+  if (!raw) return null;
+  const o = {};
+  for (const part of String(raw).split(";")) {
+    const [k, val] = part.split("=");
+    if (!k || val == null) continue;
+    const n = Number(val.trim());
+    if (Number.isFinite(n)) o[k.trim().toLowerCase()] = n;
+  }
+  if (!("total" in o || "upload" in o || "download" in o || "expire" in o)) return null;
+  return {
+    used: (o.upload || 0) + (o.download || 0),
+    total: o.total || 0,
+    expire: o.expire || 0
+  };
+}
+
+export function parseSubscriptionMeta(headers) {
+  return {
+    title: parseTitle(headerValue(headers, "profile-title")),
+    info: parseUserInfo(headerValue(headers, "subscription-userinfo"))
+  };
 }
 
 // --- A) full config xray ---
@@ -19,6 +78,9 @@ function isXrayConfig(o) {
 // Выбираем «боевой» outbound, игнорируя служебные (freedom = прямой трафик,
 // blackhole = блокировка, dns = перехват DNS).
 const SERVICE = new Set(["freedom", "blackhole", "dns", "loopback"]);
+const CONFIG_PROXY_PROTOCOLS = new Set([
+  "vless", "vmess", "trojan", "shadowsocks", "socks", "http", "wireguard"
+]);
 
 function outboundNodes(outbound) {
   const settings = outbound.settings || {};
@@ -37,9 +99,29 @@ function outboundEndpoint(ob, node) {
 }
 
 function serversFromConfig(config) {
+  const profileName = [config.remarks, config.name]
+    .find((name) => typeof name === "string" && name.trim())?.trim();
+  if (profileName) {
+    const hasSupportedOutbound = config.outbounds.some((outbound) => {
+      if (!outbound || !CONFIG_PROXY_PROTOCOLS.has(outbound.protocol)) return false;
+      const { nodes } = outboundNodes(outbound);
+      return nodes.some((node) => !!outboundEndpoint(outbound, node).host);
+    });
+    if (!hasSupportedOutbound) return [];
+    return [{
+      kind: "config",
+      configProfile: true,
+      name: profileName,
+      protocol: "xray",
+      host: "",
+      port: 0,
+      config
+    }];
+  }
+
   const servers = [];
   config.outbounds.forEach((ob, outboundIndex) => {
-    if (!ob || SERVICE.has(ob.protocol)) return;
+    if (!ob || SERVICE.has(ob.protocol) || !CONFIG_PROXY_PROTOCOLS.has(ob.protocol)) return;
     const { key, nodes } = outboundNodes(ob);
     nodes.forEach((node, nodeIndex) => {
       const ep = outboundEndpoint(ob, node);
@@ -101,14 +183,14 @@ function extractLinks(text) {
 
 // --- основной вход ---
 
-export async function fetchSubscription(url) {
-  // Качаем подписку не из браузера, а через helper: провайдер может прятаться
-  // за антибот-прокси (DDoS-Guard/Cloudflare), который блокирует fetch с
-  // браузерным User-Agent и отдаёт HTML-страницу проверки. Helper ходит в сеть
-  // обычным HTTP-клиентом (как curl), и антибот его пропускает.
+// fetchRaw(url) → { ok, body, headers?, error? }. Подписку качает helper, а не
+// браузер: провайдер может прятаться за антибот-прокси (DDoS-Guard/Cloudflare),
+// который блокирует fetch с браузерным User-Agent. Helper ходит в сеть обычным
+// HTTP-клиентом (как curl), и антибот его пропускает.
+export async function fetchSubscription(url, fetchRaw) {
   let res;
   try {
-    res = await chrome.runtime.sendMessage({ cmd: "fetchSub", url });
+    res = await fetchRaw(url);
   } catch (e) {
     throw new Error("не удалось связаться с helper'ом: " + (e?.message || e));
   }
@@ -116,6 +198,7 @@ export async function fetchSubscription(url) {
     throw new Error(res?.error || "не удалось скачать подписку");
   }
 
+  const meta = parseSubscriptionMeta(res.headers);
   const body = (res.body || "").trim();
   if (!body) throw new Error("подписка пустая");
 
@@ -133,7 +216,13 @@ export async function fetchSubscription(url) {
       if (!servers.length) {
         throw new Error("конфиг xray получен, но в нём нет рабочего outbound'а");
       }
-      return { servers, skipped: 0, total: servers.length, format: "xray-config" };
+      return {
+        servers,
+        skipped: valid.length - servers.length,
+        total: valid.length,
+        format: "xray-config",
+        meta
+      };
     }
     throw new Error("получен JSON, но это не похоже на конфиг xray");
   }
@@ -163,6 +252,7 @@ export async function fetchSubscription(url) {
     servers,
     skipped: links.length - servers.length,
     total: links.length,
-    format: "links"
+    format: "links",
+    meta
   };
 }

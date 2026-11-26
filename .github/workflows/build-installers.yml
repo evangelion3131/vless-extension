@@ -84,7 +84,19 @@ jobs:
           GH_REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
         run: |
-          gh release view "$TAG" --repo "$GH_REPO" >/dev/null 2>&1 || \
-            gh release create "$TAG" --repo "$GH_REPO" --title "$TAG" \
-              --notes "Исправлено переключение серверов и синхронизация между профилями."
+          NOTES=$(cat <<'EOF'
+          ## Что нового
+
+          - Добавлена поддержка Linux.
+          - Добавлены тест скорости соединения и сортировка серверов по скорости.
+          - Можно отправлять выбранные сайты напрямую; список исключений доступен в настройках.
+          - Улучшена надёжность проверки серверов и обработки долгих запросов helper'а.
+          - Исправлено отображение именованных профилей из подписок.
+          EOF
+          )
+          if gh release view "$TAG" --repo "$GH_REPO" >/dev/null 2>&1; then
+            gh release edit "$TAG" --repo "$GH_REPO" --title "$TAG" --notes "$NOTES"
+          else
+            gh release create "$TAG" --repo "$GH_REPO" --title "$TAG" --notes "$NOTES"
+          fi
           gh release upload "$TAG" dist/* --repo "$GH_REPO" --clobber

@@ -10,6 +10,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -26,6 +27,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -48,6 +50,7 @@ type serverMetadata struct {
 	OutboundIndex *int   `json:"outboundIndex,omitempty"`
 	NodeKey       string `json:"nodeKey,omitempty"`
 	NodeIndex     *int   `json:"nodeIndex,omitempty"`
+	ConfigProfile bool   `json:"configProfile,omitempty"`
 }
 
 type response struct {
@@ -59,7 +62,9 @@ type response struct {
 	ClientConnected bool            `json:"clientConnected"`
 	Server          *serverMetadata `json:"server,omitempty"`
 	Body            string          `json:"body,omitempty"` // тело ответа подписки (fetchSub)
-	MS              int             `json:"ms,omitempty"`   // задержка через туннель, мс (latency)
+	Headers         http.Header     `json:"headers,omitempty"`
+	MS              int             `json:"ms,omitempty"` // задержка через туннель, мс (latency)
+	SpeedMbps       float64         `json:"speedMbps,omitempty"`
 }
 
 var (
@@ -102,14 +107,18 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		return
 	}
-	usingDaemon := false
+	var usingDaemon atomic.Bool
+	var localXrayUsed atomic.Bool
+	var requests sync.WaitGroup
 	for {
 		req, err := readMessage(os.Stdin)
 		if err != nil {
 			if err == io.EOF {
-				if usingDaemon {
+				requests.Wait()
+				if usingDaemon.Load() {
 					_, _ = callDaemon(request{Cmd: "release", ClientID: clientID})
-				} else {
+				}
+				if localXrayUsed.Load() {
 					stopXray()
 				}
 				return
@@ -117,14 +126,39 @@ func main() {
 			continue
 		}
 		req.ClientID = clientID
+		if isLongRunningCommand(req.Cmd) {
+			requests.Add(1)
+			go func(req request) {
+				defer requests.Done()
+				resp, ok := callDaemon(req)
+				if ok {
+					usingDaemon.Store(true)
+				} else {
+					resp = handle(req)
+					if req.Cmd == "start" && resp.OK {
+						localXrayUsed.Store(true)
+					}
+				}
+				writeMessage(os.Stdout, resp)
+			}(req)
+			continue
+		}
 		resp, ok := callDaemon(req)
 		if ok {
-			usingDaemon = true
+			usingDaemon.Store(true)
 		} else {
-			usingDaemon = false
 			resp = handle(req)
 		}
 		writeMessage(os.Stdout, resp)
+	}
+}
+
+func isLongRunningCommand(cmd string) bool {
+	switch cmd {
+	case "fetchSub", "latency", "speed":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -132,6 +166,17 @@ var workerDataDir string
 
 const workerAddress = "127.0.0.1:17837"
 const clientTimeout = 30 * time.Second
+
+func daemonTimeout(cmd string) time.Duration {
+	switch cmd {
+	case "latency":
+		return 30 * time.Second
+	case "speed":
+		return 45 * time.Second
+	default:
+		return 20 * time.Second
+	}
+}
 
 func newClientID() (string, error) {
 	var id [16]byte
@@ -146,7 +191,7 @@ func callDaemon(req request) (response, bool) {
 	if err != nil {
 		return response{}, false
 	}
-	client := &http.Client{Timeout: 20 * time.Second}
+	client := &http.Client{Timeout: daemonTimeout(req.Cmd)}
 	httpReq, err := http.NewRequest(http.MethodPost, "http://"+workerAddress+"/api", bytes.NewReader(data))
 	if err != nil {
 		return response{}, false
@@ -242,17 +287,23 @@ func handle(req request) response {
 		expireClients()
 		return handleConnectionRequest(req)
 	case "fetchSub":
-		body, err := fetchSub(req.URL)
+		body, headers, err := fetchSub(req.URL)
 		if err != nil {
 			return response{ID: req.ID, OK: false, Error: err.Error()}
 		}
-		return response{ID: req.ID, OK: true, Body: body}
+		return response{ID: req.ID, OK: true, Body: body, Headers: headers}
 	case "latency":
-		ms, err := measureLatency(req.Link, req.Config)
+		ms, err := measureLatency(req.Link, req.Config, req.Server)
 		if err != nil {
 			return response{ID: req.ID, OK: false, Error: err.Error()}
 		}
 		return response{ID: req.ID, OK: true, MS: ms}
+	case "speed":
+		mbps, err := measureSpeed(req.Link, req.Config, req.Server)
+		if err != nil {
+			return response{ID: req.ID, OK: false, Error: err.Error()}
+		}
+		return response{ID: req.ID, OK: true, SpeedMbps: mbps}
 	default:
 		return response{ID: req.ID, OK: false, Error: "unknown command: " + req.Cmd}
 	}
@@ -370,6 +421,7 @@ func connectionKey(req request) string {
 			NodeIndex     *int   `json:"nodeIndex,omitempty"`
 			Host          string `json:"host,omitempty"`
 			Port          int    `json:"port,omitempty"`
+			ConfigProfile bool   `json:"configProfile,omitempty"`
 		}{
 			OutboundTag:   req.Server.OutboundTag,
 			OutboundIndex: req.Server.OutboundIndex,
@@ -377,6 +429,7 @@ func connectionKey(req request) string {
 			NodeIndex:     req.Server.NodeIndex,
 			Host:          req.Server.Host,
 			Port:          req.Server.Port,
+			ConfigProfile: req.Server.ConfigProfile,
 		}
 	}
 	identity, _ := json.Marshal(selected)
@@ -389,11 +442,11 @@ func connectionKey(req request) string {
 
 // fetchSub скачивает подписку по URL обычным HTTP-клиентом. В отличие от
 // браузера, антибот-прокси провайдера (DDoS-Guard/Cloudflare) пропускает такой
-// запрос — helper для него неотличим от curl. Тело возвращается как есть,
-// разбором формата занимается расширение.
-func fetchSub(subURL string) (string, error) {
+// запрос — helper для него неотличим от curl. Тело и заголовки возвращаются
+// как есть, разбором формата занимается расширение.
+func fetchSub(subURL string) (string, http.Header, error) {
 	if subURL == "" {
-		return "", fmt.Errorf("пустой URL подписки")
+		return "", nil, fmt.Errorf("пустой URL подписки")
 	}
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Get(subURL)
@@ -404,17 +457,17 @@ func fetchSub(subURL string) (string, error) {
 		if errors.As(err, &uerr) {
 			err = uerr.Err
 		}
-		return "", fmt.Errorf("не удалось скачать подписку: %v", err)
+		return "", nil, fmt.Errorf("не удалось скачать подписку: %v", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("сервер подписки ответил: %s", resp.Status)
+		return "", nil, fmt.Errorf("сервер подписки ответил: %s", resp.Status)
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20)) // до 8 МБ
 	if err != nil {
-		return "", fmt.Errorf("ошибка чтения ответа подписки: %v", err)
+		return "", nil, fmt.Errorf("ошибка чтения ответа подписки: %v", err)
 	}
-	return string(data), nil
+	return string(data), resp.Header.Clone(), nil
 }
 
 // --- latency (пинг через туннель) ---
@@ -423,40 +476,63 @@ func fetchSub(subURL string) (string, error) {
 // делает GET через его SOCKS до лёгкого эндпоинта и возвращает задержку в мс.
 // Работает независимо от активного подключения (свой порт, свой конфиг,
 // глобальный xrayCmd не трогает).
-func measureLatency(link string, raw json.RawMessage) (int, error) {
+func measureLatency(link string, raw json.RawMessage, selected *serverMetadata) (int, error) {
+	port, cleanup, err := startTestProxy(link, raw, selected, "latency")
+	if err != nil {
+		return 0, err
+	}
+	defer cleanup()
+	return socks5Get(port, "cp.cloudflare.com", 80, "/generate_204", 6*time.Second)
+}
+
+const speedTestBytes = 5 * 1024 * 1024
+
+func measureSpeed(link string, raw json.RawMessage, selected *serverMetadata) (float64, error) {
+	port, cleanup, err := startTestProxy(link, raw, selected, "speed")
+	if err != nil {
+		return 0, err
+	}
+	defer cleanup()
+	return socks5Download(port, "speed.cloudflare.com", "/__down?bytes=5242880", speedTestBytes, 30*time.Second)
+}
+
+func startTestProxy(link string, raw json.RawMessage, selected *serverMetadata, purpose string) (int, func(), error) {
 	var cfg *xrayConfig
 	var err error
 	if len(raw) > 0 {
-		cfg, err = adoptConfig(raw, nil)
+		cfg, err = adoptConfig(raw, selected)
 	} else {
 		cfg, err = buildConfig(link)
 	}
 	if err != nil {
-		return 0, fmt.Errorf("конфиг: %w", err)
+		return 0, nil, fmt.Errorf("конфиг: %w", err)
 	}
 
 	port, err := freePort()
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	cfg.setInboundPort(port)
 
 	dir, err := workDir()
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	// Отдельное имя файла на порт — чтобы не затирать active-config.json
 	// работающего подключения.
-	cfgPath := filepath.Join(dir, fmt.Sprintf("latency-%d.json", port))
-	data, _ := json.MarshalIndent(cfg.root, "", "  ")
-	if err := os.WriteFile(cfgPath, data, 0600); err != nil {
-		return 0, fmt.Errorf("запись конфига: %w", err)
+	cfgPath := filepath.Join(dir, fmt.Sprintf("%s-%d.json", purpose, port))
+	data, err := json.MarshalIndent(cfg.root, "", "  ")
+	if err != nil {
+		return 0, nil, fmt.Errorf("сериализация конфига: %w", err)
 	}
-	defer os.Remove(cfgPath)
+	if err := os.WriteFile(cfgPath, data, 0600); err != nil {
+		return 0, nil, fmt.Errorf("запись конфига: %w", err)
+	}
 
 	xrayPath, err := findXray()
 	if err != nil {
-		return 0, err
+		_ = os.Remove(cfgPath)
+		return 0, nil, err
 	}
 
 	var xrayLog bytes.Buffer
@@ -465,14 +541,11 @@ func measureLatency(link string, raw json.RawMessage) (int, error) {
 	cmd.Stderr = &xrayLog
 	hideWindow(cmd)
 	if err := cmd.Start(); err != nil {
-		return 0, fmt.Errorf("запуск xray: %w", err)
+		_ = os.Remove(cfgPath)
+		return 0, nil, fmt.Errorf("запуск xray: %w", err)
 	}
 	done := make(chan struct{})
 	go func() { _ = cmd.Wait(); close(done) }()
-	defer func() {
-		_ = cmd.Process.Kill()
-		<-done
-	}()
 
 	// Ждём, пока SOCKS-порт поднимется (до 4 секунд), или xray упадёт.
 	deadline := time.Now().Add(4 * time.Second)
@@ -484,75 +557,36 @@ func measureLatency(link string, raw json.RawMessage) (int, error) {
 		}
 		select {
 		case <-done:
-			return 0, fmt.Errorf("xray не запустился: %s", shortTail(&xrayLog))
+			_ = os.Remove(cfgPath)
+			return 0, nil, fmt.Errorf("xray не запустился: %s", shortTail(&xrayLog))
 		default:
 		}
 		if time.Now().After(deadline) {
-			return 0, fmt.Errorf("xray не поднялся за отведённое время")
+			_ = cmd.Process.Kill()
+			<-done
+			_ = os.Remove(cfgPath)
+			return 0, nil, fmt.Errorf("xray не поднялся за отведённое время")
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	return socks5Get(port, "cp.cloudflare.com", 80, "/generate_204", 6*time.Second)
+	cleanup := func() {
+		_ = cmd.Process.Kill()
+		<-done
+		_ = os.Remove(cfgPath)
+	}
+	return port, cleanup, nil
 }
 
 // socks5Get открывает соединение к локальному SOCKS5 (без аутентификации),
 // делает CONNECT к host:port и HTTP GET, возвращая время round-trip до первой
 // строки ответа. Только стандартная библиотека — без x/net/proxy.
 func socks5Get(socksPort int, host string, port int, path string, timeout time.Duration) (int, error) {
-	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", socksPort), 2*time.Second)
+	conn, start, err := socks5Connect(socksPort, host, port, timeout)
 	if err != nil {
-		return 0, fmt.Errorf("нет соединения с прокси: %v", err)
+		return 0, err
 	}
 	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(timeout))
-
-	// SOCKS5 greeting: VER=5, 1 метод, 0x00 (no auth)
-	if _, err := conn.Write([]byte{0x05, 0x01, 0x00}); err != nil {
-		return 0, err
-	}
-	sel := make([]byte, 2)
-	if _, err := io.ReadFull(conn, sel); err != nil {
-		return 0, err
-	}
-	if sel[0] != 0x05 || sel[1] != 0x00 {
-		return 0, fmt.Errorf("socks5: метод аутентификации отклонён")
-	}
-
-	// Отсюда засекаем: CONNECT идёт через туннель до целевого хоста.
-	start := time.Now()
-
-	// CONNECT host:port, ATYP=domain (0x03)
-	hb := []byte(host)
-	req := append([]byte{0x05, 0x01, 0x00, 0x03, byte(len(hb))}, hb...)
-	req = append(req, byte(port>>8), byte(port))
-	if _, err := conn.Write(req); err != nil {
-		return 0, err
-	}
-	head := make([]byte, 4)
-	if _, err := io.ReadFull(conn, head); err != nil {
-		return 0, err
-	}
-	if head[1] != 0x00 {
-		return 0, fmt.Errorf("socks5: соединение отклонено (код %d)", head[1])
-	}
-	// Пропускаем BND.ADDR + BND.PORT в зависимости от типа адреса.
-	switch head[3] {
-	case 0x01: // IPv4
-		_, err = io.ReadFull(conn, make([]byte, 4+2))
-	case 0x04: // IPv6
-		_, err = io.ReadFull(conn, make([]byte, 16+2))
-	case 0x03: // domain
-		l := make([]byte, 1)
-		if _, err = io.ReadFull(conn, l); err == nil {
-			_, err = io.ReadFull(conn, make([]byte, int(l[0])+2))
-		}
-	default:
-		return 0, fmt.Errorf("socks5: неизвестный тип адреса")
-	}
-	if err != nil {
-		return 0, err
-	}
 
 	httpReq := fmt.Sprintf("GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: vless-eevee\r\nConnection: close\r\n\r\n", path, host)
 	if _, err := conn.Write([]byte(httpReq)); err != nil {
@@ -573,6 +607,111 @@ func socks5Get(socksPort int, host string, port int, path string, timeout time.D
 		return 0, fmt.Errorf("эндпоинт вернул %d", code)
 	}
 	return int(elapsed.Milliseconds()), nil
+}
+
+func socks5Download(socksPort int, host, path string, maxBytes int, timeout time.Duration) (float64, error) {
+	conn, _, err := socks5Connect(socksPort, host, 443, timeout)
+	if err != nil {
+		return 0, err
+	}
+	defer conn.Close()
+
+	tlsConn := tls.Client(conn, &tls.Config{
+		ServerName: host,
+		MinVersion: tls.VersionTLS12,
+	})
+	if err := tlsConn.Handshake(); err != nil {
+		return 0, fmt.Errorf("TLS: %w", err)
+	}
+	return measureHTTPSDownload(tlsConn, host, path, maxBytes)
+}
+
+func measureHTTPSDownload(conn net.Conn, host, path string, maxBytes int) (float64, error) {
+	request := fmt.Sprintf("GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: vless-eevee\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n", path, host)
+	if _, err := io.WriteString(conn, request); err != nil {
+		return 0, err
+	}
+
+	httpRequest, err := http.NewRequest(http.MethodGet, "https://"+host+path, nil)
+	if err != nil {
+		return 0, fmt.Errorf("запрос теста скорости: %w", err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(conn), httpRequest)
+	if err != nil {
+		return 0, fmt.Errorf("ошибка ответа теста скорости: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return 0, fmt.Errorf("эндпоинт теста скорости ответил: %s", resp.Status)
+	}
+
+	start := time.Now()
+	n, err := io.CopyN(io.Discard, resp.Body, int64(maxBytes))
+	if err != nil {
+		return 0, fmt.Errorf("загрузка тестовых данных: %w", err)
+	}
+	elapsed := time.Since(start)
+	if n == 0 || elapsed <= 0 {
+		return 0, fmt.Errorf("не удалось измерить скорость")
+	}
+	return float64(n*8) / elapsed.Seconds() / 1_000_000, nil
+}
+
+func socks5Connect(socksPort int, host string, port int, timeout time.Duration) (net.Conn, time.Time, error) {
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", socksPort), 2*time.Second)
+	if err != nil {
+		return nil, time.Time{}, fmt.Errorf("нет соединения с прокси: %v", err)
+	}
+	fail := func(err error) (net.Conn, time.Time, error) {
+		_ = conn.Close()
+		return nil, time.Time{}, err
+	}
+	if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
+		return fail(err)
+	}
+
+	if _, err := conn.Write([]byte{0x05, 0x01, 0x00}); err != nil {
+		return fail(err)
+	}
+	sel := make([]byte, 2)
+	if _, err := io.ReadFull(conn, sel); err != nil {
+		return fail(err)
+	}
+	if sel[0] != 0x05 || sel[1] != 0x00 {
+		return fail(fmt.Errorf("socks5: метод аутентификации отклонён"))
+	}
+
+	start := time.Now()
+	hostBytes := []byte(host)
+	req := append([]byte{0x05, 0x01, 0x00, 0x03, byte(len(hostBytes))}, hostBytes...)
+	req = append(req, byte(port>>8), byte(port))
+	if _, err := conn.Write(req); err != nil {
+		return fail(err)
+	}
+	head := make([]byte, 4)
+	if _, err := io.ReadFull(conn, head); err != nil {
+		return fail(err)
+	}
+	if head[0] != 0x05 || head[1] != 0x00 {
+		return fail(fmt.Errorf("socks5: соединение отклонено (код %d)", head[1]))
+	}
+	switch head[3] {
+	case 0x01:
+		_, err = io.ReadFull(conn, make([]byte, 4+2))
+	case 0x04:
+		_, err = io.ReadFull(conn, make([]byte, 16+2))
+	case 0x03:
+		length := make([]byte, 1)
+		if _, err = io.ReadFull(conn, length); err == nil {
+			_, err = io.ReadFull(conn, make([]byte, int(length[0])+2))
+		}
+	default:
+		return fail(fmt.Errorf("socks5: неизвестный тип адреса"))
+	}
+	if err != nil {
+		return fail(err)
+	}
+	return conn, start, nil
 }
 
 // shortTail — короткий хвост вывода xray для компактных ошибок (latency).
@@ -772,7 +911,11 @@ func readMessage(r io.Reader) (request, error) {
 	return req, nil
 }
 
+var nativeWriteMu sync.Mutex
+
 func writeMessage(w io.Writer, v any) {
+	nativeWriteMu.Lock()
+	defer nativeWriteMu.Unlock()
 	data, _ := json.Marshal(v)
 	_ = binary.Write(w, binary.LittleEndian, uint32(len(data)))
 	_, _ = w.Write(data)

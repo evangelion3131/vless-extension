@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "vless-eevee",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "VLESS-прокси только для браузера. Вставьте ссылку-подписку или vless:// — IP меняется в браузере, система остаётся нетронутой.",
   "homepage_url": "https://github.com/evangelion3131/vless-extension",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAyqlTJaeF2meAEvJEdd+IvVawY7ZVKksH5Ztf9hjodDOTv1y1ZcgtMBIR6BA+ZQFh/pVXgWWnewdUkNw/S14myZw9f4++GL5dLM3vczu4psMRP/syPfDOKVWhY2bFpkStIjYAZvuYRmH9rElCLE9J/fRMywJg6837chnMz8P2AikeHxhpwHE+ICsE7hN7J9YVzU5gySQrvCRGvK5qSIrOKFHmxb/cmrK+ls93NlIN62xxzSAol4fVW93H5P5932wia7OnT2EBLjU/DL4+b6UtgsZYJ9c1ed8Dkjmg45Xnz8fnr3FNI0r5dMwp9sALDOtIWDAbWFpGJlb90Y8G2WqkbQIDAQAB",
@@ -9,7 +9,9 @@
   "permissions": [
     "proxy",
     "storage",
-    "nativeMessaging"
+    "nativeMessaging",
+    "alarms",
+    "activeTab"
   ],
   "host_permissions": [
     "https://*/*",

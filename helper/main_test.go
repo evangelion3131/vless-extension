@@ -1,11 +1,20 @@
 package main
 
 import (
+	"bytes"
+	"crypto/tls"
+	"encoding/binary"
 	"encoding/json"
+	"io"
+	"math"
 	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"testing"
 	"time"
 )
@@ -48,6 +57,106 @@ func TestWorkDirHonorsWorkerDataDir(t *testing.T) {
 	}
 	if got != dir {
 		t.Fatalf("workDir() = %q, want %q", got, dir)
+	}
+}
+
+func TestFetchSubReturnsHeaders(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Profile-Title", "Example subscription")
+		w.Header().Set("Subscription-Userinfo", "upload=10; download=20; total=100; expire=200")
+		_, _ = w.Write([]byte("subscription body"))
+	}))
+	defer server.Close()
+
+	body, headers, err := fetchSub(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body != "subscription body" {
+		t.Fatalf("body = %q, want subscription body", body)
+	}
+	if got := headers.Get("Profile-Title"); got != "Example subscription" {
+		t.Fatalf("Profile-Title = %q, want Example subscription", got)
+	}
+	if got := headers.Get("Subscription-Userinfo"); got != "upload=10; download=20; total=100; expire=200" {
+		t.Fatalf("Subscription-Userinfo = %q, want subscription metadata", got)
+	}
+}
+
+func TestMeasureHTTPSDownloadReadsBoundedPayload(t *testing.T) {
+	payload := bytes.Repeat([]byte("x"), 64*1024)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", "65536")
+		_, _ = w.Write(payload)
+	}))
+	defer server.Close()
+
+	target, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tlsConfig := server.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
+	conn, err := tls.Dial("tcp", target.Host, tlsConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	mbps, err := measureHTTPSDownload(conn, target.Host, "/download", len(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mbps <= 0 || math.IsInf(mbps, 0) || math.IsNaN(mbps) {
+		t.Fatalf("measured speed = %v Mbps, want a finite positive value", mbps)
+	}
+}
+
+func TestLongRunningCommandsAreDispatchedAsynchronously(t *testing.T) {
+	for _, cmd := range []string{"fetchSub", "latency", "speed"} {
+		if !isLongRunningCommand(cmd) {
+			t.Errorf("%q should be dispatched asynchronously", cmd)
+		}
+	}
+	if isLongRunningCommand("status") {
+		t.Fatal("status should remain synchronous")
+	}
+}
+
+func TestConcurrentNativeMessageWritesKeepFramesIntact(t *testing.T) {
+	const count = 100
+	var output bytes.Buffer
+	var writers sync.WaitGroup
+	for id := 0; id < count; id++ {
+		writers.Add(1)
+		go func(id int) {
+			defer writers.Done()
+			writeMessage(&output, response{ID: id, OK: true})
+		}(id)
+	}
+	writers.Wait()
+
+	reader := bytes.NewReader(output.Bytes())
+	seen := make(map[int]bool, count)
+	for i := 0; i < count; i++ {
+		var length uint32
+		if err := binary.Read(reader, binary.LittleEndian, &length); err != nil {
+			t.Fatalf("read frame length: %v", err)
+		}
+		frame := make([]byte, length)
+		if _, err := io.ReadFull(reader, frame); err != nil {
+			t.Fatalf("read frame body: %v", err)
+		}
+		var got response
+		if err := json.Unmarshal(frame, &got); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		if seen[got.ID] {
+			t.Fatalf("duplicate response ID %d", got.ID)
+		}
+		seen[got.ID] = true
+	}
+	if reader.Len() != 0 {
+		t.Fatalf("%d unexpected trailing bytes", reader.Len())
 	}
 }
 

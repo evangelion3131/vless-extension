@@ -50,6 +50,32 @@ func TestAdoptConfigSelectsRequestedServer(t *testing.T) {
 	}
 }
 
+func TestAdoptConfigPreservesFullProfileRouting(t *testing.T) {
+	raw := []byte(`{
+		"outbounds": [
+			{"tag":"proxy-a","protocol":"vless","settings":{"vnext":[{"address":"a.example","port":443}]}},
+			{"tag":"proxy-b","protocol":"vless","settings":{"vnext":[{"address":"b.example","port":443}]}},
+			{"tag":"direct","protocol":"freedom","settings":{}}
+		],
+		"routing":{"rules":[{"type":"field","balancerTag":"auto"}],
+			"balancers":[{"tag":"auto","selector":["proxy-a","proxy-b"]}]}
+	}`)
+	cfg, err := adoptConfig(raw, &serverMetadata{Name: "Auto", ConfigProfile: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	outbounds := cfg.root["outbounds"].([]any)
+	if len(outbounds) != 3 {
+		t.Fatalf("outbound count = %d, want all 3 profile outbounds", len(outbounds))
+	}
+	routing := cfg.root["routing"].(map[string]any)
+	rules := routing["rules"].([]any)
+	if got := rules[0].(map[string]any)["balancerTag"]; got != "auto" {
+		t.Fatalf("profile routing balancer = %v, want auto", got)
+	}
+}
+
 func TestAdoptConfigRoutesBalancerRulesToSelectedServer(t *testing.T) {
 	raw := []byte(`{
 		"outbounds":[

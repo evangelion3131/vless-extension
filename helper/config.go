@@ -74,7 +74,7 @@ var serviceOutboundProtocols = map[string]bool{
 }
 
 func selectConfigOutbound(root map[string]any, selected *serverMetadata) error {
-	if selected == nil {
+	if selected == nil || selected.ConfigProfile {
 		return nil
 	}
 	outbounds, ok := root["outbounds"].([]any)

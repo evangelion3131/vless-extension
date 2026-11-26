@@ -1,6 +1,6 @@
 # Privacy Policy — vless-eevee
 
-_Last updated: 14 July 2026_
+_Last updated: 26 November 2026_
 
 vless-eevee is a browser extension that routes browser traffic through a
 proxy server that you provide. This policy explains what the extension does
@@ -19,6 +19,9 @@ data. Everything stays on your own device.
 - **Proxy settings** are applied only within your Chrome browser, using
   Chrome's `proxy` API. They affect only your browser, not the rest of your
   system.
+- When you open the extension popup, it can read the active tab's hostname so
+  you can add that site to the direct-connection exceptions. Only the hostname
+  is stored locally; page content and browsing history are not read.
 
 ## The helper application
 
@@ -42,7 +45,8 @@ your data, does not use analytics, and does not track you.
 The extension does not share data with third parties. When connected, your
 browser traffic passes through the proxy server **you** configured; that
 server is operated by you or your chosen provider, not by the developer of
-this extension.
+this extension. Sites added to the direct-connection exceptions are reached
+without the proxy, as with ordinary browsing.
 
 ## Open source
 

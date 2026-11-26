@@ -11,9 +11,14 @@
       <span class="dot" id="statusDot"></span>
       <h1>vless-eevee</h1>
     </div>
-    <span class="status-label" id="statusLabel">выключено</span>
+    <div class="top-right">
+      <span class="status-label" id="statusLabel">выключено</span>
+      <button id="settingsBtn" class="icon-btn" data-icon="sliders"
+              title="Настройки" aria-label="Настройки" aria-pressed="false"></button>
+    </div>
   </header>
 
+  <!-- основной экран -->
   <div class="app" id="appView">
     <!-- левая колонка: подключение -->
     <aside class="hero">
@@ -35,36 +40,163 @@
       <div class="hero-tools">
         <button id="ipBtn" class="ghost" title="Проверить текущий IP браузера">Узнать мой IP</button>
         <p class="hint" id="ipResult"></p>
+        <button id="siteBypassBtn" class="ghost" disabled>Добавить текущий сайт в исключения</button>
+        <p class="hint" id="siteBypassInfo">Сайт будет открываться напрямую</p>
         <p class="hint error" id="errorLine"></p>
       </div>
     </aside>
 
-    <!-- правая колонка: серверы -->
+    <!-- правая колонка: подписки и серверы -->
     <main class="list-pane">
       <section class="add">
         <input id="linkInput" type="text" spellcheck="false"
                placeholder="Ссылка-подписка или vless://" />
         <button id="addBtn" title="Добавить">+</button>
       </section>
-      <p class="hint" id="addHint"></p>
-
-      <section class="sub" id="subBar" hidden>
-        <div class="sub-info">
-          <span class="sub-label">Подписка</span>
-          <span class="sub-url" id="subUrl"></span>
-        </div>
-        <button id="refreshBtn" class="ghost small" title="Обновить список серверов">&#8635;</button>
-      </section>
 
       <div class="list-head" id="listHead" hidden>
         <span class="list-title">Серверы</span>
-        <button id="pingAllBtn" class="ghost small" title="Измерить задержку всех серверов">Пинг всех</button>
+        <div class="list-tools">
+          <select id="sortSelect" class="select sort-select" title="Сортировка серверов" aria-label="Сортировка серверов">
+            <option value="default">По порядку</option>
+            <option value="ping">По пингу</option>
+            <option value="speed">По скорости</option>
+          </select>
+          <button id="refreshAllBtn" class="icon-btn" data-icon="refresh"
+                  title="Обновить все подписки" aria-label="Обновить все подписки"></button>
+          <button id="pingAllBtn" class="ghost small" title="Измерить задержку всех серверов">Пинг всех</button>
+          <button id="speedAllBtn" class="ghost small" title="Измерить скорость всех серверов">Скорость всех</button>
+        </div>
       </div>
 
       <section class="servers" id="serverList"></section>
     </main>
   </div><!-- /appView -->
 
+  <!-- настройки -->
+  <section id="settingsView" class="settings" hidden>
+    <div class="settings-inner">
+      <div class="settings-head">
+        <button id="settingsBack" class="ghost small"><span class="ic" data-icon="back"></span>Назад</button>
+        <h2>Настройки</h2>
+      </div>
+
+      <div class="set-group">
+        <h3>Подписки</h3>
+        <div class="set-card">
+          <label class="row">
+            <span class="row-text">
+              <span class="row-title">Обновлять автоматически</span>
+              <span class="row-desc">Списки серверов обновляются сами, пока открыт браузер</span>
+            </span>
+            <span class="switch"><input type="checkbox" id="optAutoUpdate"><span class="track"></span></span>
+          </label>
+          <label class="row">
+            <span class="row-text">
+              <span class="row-title">Как часто обновлять</span>
+            </span>
+            <select id="optInterval" class="select">
+              <option value="1">Каждый час</option>
+              <option value="2">Каждые 2 часа</option>
+              <option value="4">Каждые 4 часа</option>
+              <option value="6">Каждые 6 часов</option>
+              <option value="12">Каждые 12 часов</option>
+              <option value="24">Раз в сутки</option>
+            </select>
+          </label>
+          <label class="row">
+            <span class="row-text">
+              <span class="row-title">Обновлять при запуске браузера</span>
+            </span>
+            <span class="switch"><input type="checkbox" id="optUpdateOnStart"><span class="track"></span></span>
+          </label>
+          <div class="row static">
+            <span class="row-text">
+              <span class="row-title">Обновить все подписки сейчас</span>
+            </span>
+            <button id="refreshNowBtn" class="ghost small">Обновить</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="set-group">
+        <h3>Подключение</h3>
+        <div class="set-card">
+          <label class="row">
+            <span class="row-text">
+              <span class="row-title">Подключаться при запуске браузера</span>
+              <span class="row-desc">К тому серверу, к которому вы подключались последним</span>
+            </span>
+            <span class="switch"><input type="checkbox" id="optAutoConnect"><span class="track"></span></span>
+          </label>
+        </div>
+      </div>
+
+      <div class="set-group">
+        <h3>Исключения</h3>
+        <div class="set-card">
+          <div class="row static">
+            <span class="row-text">
+              <span class="row-title">Сайты напрямую</span>
+              <span class="row-desc">Сайт и его поддомены обходят прокси. Изменения применяются сразу.</span>
+            </span>
+          </div>
+          <div class="bypass-add">
+            <input id="bypassHostInput" class="bypass-input" type="text" spellcheck="false"
+                   placeholder="example.com или URL сайта" aria-label="Домен для исключения" />
+            <button id="bypassHostAddBtn" class="ghost small">Добавить</button>
+          </div>
+          <div id="bypassHostsList" class="bypass-list"></div>
+        </div>
+      </div>
+
+      <div class="set-group">
+        <h3>Вид</h3>
+        <div class="set-card">
+          <label class="row">
+            <span class="row-text">
+              <span class="row-title">Показывать технические данные</span>
+              <span class="row-desc">Адрес, транспорт, шифрование и UUID под названием сервера</span>
+            </span>
+            <span class="switch"><input type="checkbox" id="optShowTech"><span class="track"></span></span>
+          </label>
+        </div>
+      </div>
+
+      <div class="set-group">
+        <h3>Данные</h3>
+        <div class="set-card">
+          <div class="row static">
+            <span class="row-text">
+              <span class="row-title">Резервная копия</span>
+              <span class="row-desc">Подписки, серверы, избранное и настройки. Копия содержит ваши ссылки — не передавайте её другим</span>
+            </span>
+            <span class="row-actions">
+              <button id="exportBtn" class="ghost small">Скопировать</button>
+              <button id="importToggleBtn" class="ghost small">Восстановить</button>
+            </span>
+          </div>
+          <div class="import-box" id="importBox" hidden>
+            <textarea id="importText" spellcheck="false" placeholder="Вставьте сюда резервную копию"></textarea>
+            <button id="importApplyBtn" class="toggle">Добавить из копии</button>
+          </div>
+          <div class="row static">
+            <span class="row-text">
+              <span class="row-title">Сбросить все данные</span>
+              <span class="row-desc">Удалит подписки, серверы, избранное и настройки</span>
+            </span>
+            <button id="resetBtn" class="ghost small danger">Сбросить</button>
+          </div>
+        </div>
+      </div>
+
+      <p class="about">vless-eevee <span id="aboutVersion"></span> ·
+        <a href="https://github.com/evangelion3131/vless-extension" target="_blank" rel="noopener noreferrer">GitHub</a>
+      </p>
+    </div>
+  </section>
+
+  <!-- первая установка helper'а -->
   <section id="onboard" hidden>
     <h2 class="ob-title">Нужно установить приложение</h2>
     <p class="ob-text">
@@ -83,6 +215,8 @@
     <button id="obRecheck" class="toggle">Проверить снова</button>
     <p class="hint" id="obHint"></p>
   </section>
+
+  <div class="toasts" id="toasts" aria-live="polite"></div>
 
   <script type="module" src="popup.js"></script>
 </body>
