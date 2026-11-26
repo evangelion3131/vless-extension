@@ -123,7 +123,7 @@ sudo apt install ./vless-eevee_*.deb
 
 На **Linux**,**Windows** и **macOS**:
 
-1. Скачайте `extension-*.zip` из раздела **Assets** на странице релиза.
+1. Скачайте `vless-eevee.extension.zip` из раздела **Assets** на странице релиза.
 2. Распакуйте архив в удобную папку.
 3. Откройте страницу расширений:
 
