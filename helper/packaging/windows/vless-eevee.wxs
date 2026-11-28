@@ -59,12 +59,6 @@
       <Component Id="GeoSite" Guid="*">
         <File Source="$(var.PayloadDir)\geosite.dat" KeyPath="yes" />
       </Component>
-      <Component Id="ExtensionCRX" Guid="*">
-        <File Source="$(var.PayloadDir)\vless-eevee.crx" KeyPath="yes" />
-      </Component>
-      <Component Id="ExtensionVersion" Guid="*">
-        <File Source="$(var.PayloadDir)\vless-eevee.crx.version" KeyPath="yes" />
-      </Component>
     </ComponentGroup>
 
     <Component Id="NativeMessagingRegistration" Directory="INSTALLFOLDER" Guid="*">

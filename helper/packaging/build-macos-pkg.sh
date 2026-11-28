@@ -150,9 +150,6 @@ codesign --force --sign - "$APP_DIR/helper"
 codesign --force --sign - "$APP_DIR/xray"
 codesign --force --sign - "$TRAY_APP/Contents/MacOS/tray"
 
-"$SCRIPT_DIR/build-extension-crx.sh" "$APP_DIR/vless-eevee.crx" "${VLESS_EEVEE_KEY_FILE:-}"
-cp "$APP_DIR/vless-eevee.crx.version" "$APP_DIR/extension-version.txt"
-
 cat > "$HOST_DIR/$HOST_NAME.json" << EOF
 {
   "name": "$HOST_NAME",

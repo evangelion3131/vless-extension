@@ -1,35 +1,15 @@
 #!/bin/sh
 set -eu
 
-install_extension_policy() {
-    browser="$1"
-    case "$browser" in
-        chrome)
-            install -d -m 755 /opt/google/chrome/extensions /usr/share/google-chrome/extensions \
-                /etc/opt/chrome/policies/managed
-            policy_dir=/opt/google/chrome/extensions
-            ;;
-        chromium)
-            install -d -m 755 /usr/share/chromium/extensions /etc/chromium/policies/managed
-            policy_dir=/usr/share/chromium/extensions
-            ;;
-        brave)
-            install -d -m 755 /etc/brave/policies/managed
-            install -d -m 755 /usr/share/brave-browser/extensions
-            policy_dir=/usr/share/brave-browser/extensions
-            ;;
-        *)
-            return 0
-            ;;
-    esac
-
-    extension_version="$(cat /var/lib/vless-eevee/extension-version.txt)"
-    cat > "$policy_dir/pflnlemikfjdffpkadjjemologkalkcl.json" <<EOF
-{
-  "external_crx": "/var/lib/vless-eevee/vless-eevee.crx",
-  "external_version": "$extension_version"
-}
-EOF
+remove_legacy_extension_policy() {
+    rm -f \
+        /opt/google/chrome/extensions/pflnlemikfjdffpkadjjemologkalkcl.json \
+        /usr/share/google-chrome/extensions/pflnlemikfjdffpkadjjemologkalkcl.json \
+        /usr/share/chromium/extensions/pflnlemikfjdffpkadjjemologkalkcl.json \
+        /usr/share/brave-browser/extensions/pflnlemikfjdffpkadjjemologkalkcl.json \
+        /etc/opt/chrome/policies/managed/pflnlemikfjdffpkadjjemologkalkcl.json \
+        /etc/chromium/policies/managed/pflnlemikfjdffpkadjjemologkalkcl.json \
+        /etc/brave/policies/managed/pflnlemikfjdffpkadjjemologkalkcl.json
 }
 
 register_brave_host() {
@@ -60,22 +40,12 @@ EOF
 
 if [ "$1" = configure ]; then
     install -d -m 755 /var/lib/vless-eevee
-    cp -f /opt/vless-eevee/vless-eevee.crx /var/lib/vless-eevee/vless-eevee.crx
-    cp -f /opt/vless-eevee/extension-version.txt /var/lib/vless-eevee/extension-version.txt
+    rm -f /var/lib/vless-eevee/vless-eevee.crx /var/lib/vless-eevee/extension-version.txt
+    remove_legacy_extension_policy
 
     systemctl daemon-reload
     systemctl enable vless-eevee-worker.service
     systemctl restart vless-eevee-worker.service
-
-    if command -v google-chrome >/dev/null 2>&1 || [ -x /opt/google/chrome/google-chrome ]; then
-        install_extension_policy chrome
-    fi
-    if command -v chromium >/dev/null 2>&1 || command -v chromium-browser >/dev/null 2>&1; then
-        install_extension_policy chromium
-    fi
-    if command -v brave-browser >/dev/null 2>&1; then
-        install_extension_policy brave
-    fi
 
     install_uid="${PKEXEC_UID:-}"
     if [ -z "$install_uid" ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ]; then

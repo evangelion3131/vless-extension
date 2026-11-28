@@ -15,26 +15,7 @@ permissions:
   contents: read
 
 jobs:
-  extension:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install Chromium packaging browser
-        run: sudo apt-get update && sudo apt-get install -y chromium-browser
-      - name: Build signed extension
-        run: |
-          mkdir -p dist
-          bash helper/packaging/build-extension-crx.sh dist/vless-eevee.extension.crx
-        env:
-          VLESS_EEVEE_KEY_B64: ${{ secrets.VLESS_EEVEE_KEY_B64 }}
-      - uses: actions/upload-artifact@v4
-        with:
-          name: installer-extension-crx
-          path: dist/vless-eevee.extension.crx
-          if-no-files-found: error
-
   linux:
-    needs: extension
     strategy:
       fail-fast: false
       matrix:
@@ -49,16 +30,10 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: helper/go.mod
-      - uses: actions/download-artifact@v4
-        with:
-          name: installer-extension-crx
-          path: dist
       - name: Install Linux tray build dependencies
         run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libayatana-appindicator3-dev
       - name: Build Debian package
         run: bash helper/packaging/build-linux-deb.sh "${{ matrix.arch }}"
-        env:
-          VLESS_EEVEE_CRX_FILE: dist/vless-eevee.extension.crx
       - uses: actions/upload-artifact@v4
         with:
           name: installer-linux-${{ matrix.arch }}
@@ -75,9 +50,6 @@ jobs:
         with:
           msystem: MINGW64
           install: mingw-w64-x86_64-gcc
-      - name: Install Chrome for CRX packaging
-        shell: pwsh
-        run: choco install googlechrome --no-progress -y --ignore-checksums
       - name: Install WiX
         run: dotnet tool install --global wix --version 4.0.5
       - name: Add WiX to PATH
@@ -85,8 +57,6 @@ jobs:
       - name: Build MSI
         shell: pwsh
         run: ./helper/packaging/build-windows-msi.ps1
-        env:
-          VLESS_EEVEE_KEY_B64: ${{ secrets.VLESS_EEVEE_KEY_B64 }}
       - uses: actions/upload-artifact@v4
         with:
           name: installer-windows-x64
@@ -133,15 +103,6 @@ jobs:
               raise SystemExit(f"invalid release tag: {tag}")
           if tag != f"v{version}":
               raise SystemExit(f"release tag {tag} does not match extension version {version}")
-          Path("dist/vless-eevee-updates.xml").write_text(
-              '<?xml version="1.0" encoding="UTF-8"?>\n'
-              '<gupdate xmlns="http://www.google.com/update2/response" protocol="2.0">\n'
-              '  <app appid="pflnlemikfjdffpkadjjemologkalkcl">\n'
-              f'    <updatecheck codebase="https://github.com/evangelion3131/vless-extension/releases/download/{tag}/vless-eevee.extension.crx" version="{version}"/>\n'
-              '  </app>\n'
-              '</gupdate>\n',
-              encoding="utf-8",
-          )
           PY
       - name: Create release and upload packages
         env:
@@ -156,6 +117,7 @@ jobs:
           - Добавлены настройки размера и таймаута проверки скорости.
           - Улучшена синхронизация подписок и исправлено падение окна расширения при обновлении хранилища.
           - Для Linux helper использует системный DNS resolver.
+          - Расширение загружается распакованным из ZIP; автоматическая установка CRX удалена.
           EOF
           )
           if gh release view "$TAG" --repo "$GH_REPO" >/dev/null 2>&1; then

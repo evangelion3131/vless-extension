@@ -20,8 +20,8 @@ if manifest["name"] != "vless-eevee":
     fail("extension name is not vless-eevee")
 if manifest["manifest_version"] != 3:
     fail("extension is not Manifest V3")
-if "https://github.com/evangelion3131/vless-extension/releases/latest/download/vless-eevee-updates.xml" != manifest.get("update_url"):
-    fail("extension is missing its HTTPS release update URL")
+if "update_url" in manifest:
+    fail("extension must not use CRX-based browser updates")
 
 popup_html = (ROOT / "extension/popup.html").read_text()
 popup_js = (ROOT / "extension/popup.js").read_text()
@@ -50,10 +50,8 @@ if 'cd "$REPO_ROOT/helper"\n  # Use libc/NSS DNS resolution' not in linux_text o
     fail("Linux helper must use the system DNS resolver")
 if 'OUTPUT="$REPO_ROOT/dist/vless-eevee.v${VERSION}.linux.${ARCH}.deb"' not in linux_text:
     fail("Linux package output must include its version and architecture")
-if "VLESS_EEVEE_CRX_FILE" not in linux_text:
-    fail("Linux package must support the shared signed extension artifact")
-if "vless-eevee.crx" not in linux_text:
-    fail("Linux package does not include extension CRX")
+if ".crx" in linux_text.lower():
+    fail("Linux package must not build or bundle a CRX")
 if "trayapp" not in linux_text or "vless-eevee-tray.desktop" not in linux_text:
     fail("Linux package is missing the tray app")
 if "/usr/share/applications/vless-eevee.desktop" not in linux_text:
@@ -69,10 +67,10 @@ if "vless-eevee-worker.service" not in postinst:
     fail("Linux post-install does not start Worker")
 if "systemctl restart vless-eevee-worker.service" not in postinst:
     fail("Linux post-install does not restart an already running Worker")
-if '"external_crx": "/var/lib/vless-eevee/vless-eevee.crx"' not in postinst:
-    fail("Linux extension policy must install the CRX bundled with the package")
-if '"external_version": "$extension_version"' not in postinst:
-    fail("Linux extension policy must use the packaged extension version")
+if "external_crx" in postinst:
+    fail("Linux post-install must not create CRX extension policies")
+if "remove_legacy_extension_policy" not in postinst or "/var/lib/vless-eevee/vless-eevee.crx" not in postinst:
+    fail("Linux post-install must remove policies and files from older CRX installs")
 if "disable --now vless-eevee-worker.service" not in prerm:
     fail("Linux removal does not stop Worker")
 
@@ -82,9 +80,11 @@ try:
 except Exception as exc:
     fail(f"WiX XML is invalid: {exc}")
 wix_text = wix.read_text()
-for required in ("vless-eevee.crx", "tray.exe", "StartWorker", "StopWorker", "StartMenuShortcut", HOST_NAME):
+for required in ("tray.exe", "StartWorker", "StopWorker", "StartMenuShortcut", HOST_NAME):
     if required not in wix_text:
         fail(f"WiX package is missing {required}")
+if ".crx" in wix_text.lower():
+    fail("Windows package must not bundle a CRX")
 if "LocalAppDataFolder" not in wix_text or "%LOCALAPPDATA%\\vless-eevee" not in wix_text:
     fail("Windows worker must keep writable configuration outside the install directory")
 
@@ -93,8 +93,8 @@ if "LaunchDaemons/com.vless.eevee.worker.plist" not in mac_text:
     fail("macOS package is missing LaunchDaemon")
 if "NativeMessagingHosts" not in mac_text:
     fail("macOS package is missing Native Messaging registration")
-if "vless-eevee.crx" not in mac_text:
-    fail("macOS package is missing extension CRX")
+if ".crx" in mac_text.lower():
+    fail("macOS package must not build or bundle a CRX")
 if "trayapp" not in mac_text or "LaunchAgents" not in mac_text or "com.vless.eevee.tray.plist" not in mac_text:
     fail("macOS package is missing the tray app")
 if 'OUTPUT="$REPO_ROOT/dist/vless-eevee.v${VERSION}.macos.${PACKAGE_ARCH}.pkg"' not in mac_text:
@@ -103,19 +103,27 @@ if 'OUTPUT="$REPO_ROOT/dist/vless-eevee.v${VERSION}.macos.${PACKAGE_ARCH}.pkg"' 
 windows_text = scripts[2].read_text()
 if '$OutputPath = Join-Path $OutputDir "vless-eevee.v$Version.windows.x64.msi"' not in windows_text:
     fail("Windows package output must include its version and architecture")
+if ".crx" in windows_text.lower():
+    fail("Windows package must not build or bundle a CRX")
 
 workflow = (ROOT / ".github/workflows/build-installers.yml").read_text()
-if "vless-eevee.extension.crx" not in workflow or "vless-eevee-updates.xml" not in workflow:
-    fail("release workflow is missing extension update assets")
+if ".crx" in workflow.lower() or "vless-eevee-updates.xml" in workflow:
+    fail("release workflow must not build or publish CRX assets")
 for expected in (
-    "installer-extension-crx",
-    "needs: extension",
     'target="dist/vless-eevee.${TAG}.linux.${architecture}.deb"',
     'target="dist/vless-eevee.${TAG}.windows.x64.msi"',
     'if tag != f"v{version}":',
 ):
     if expected not in workflow:
         fail(f"release workflow is missing versioned asset behavior: {expected}")
+if (ROOT / "helper/packaging/build-extension-crx.sh").exists():
+    fail("obsolete CRX packaging script must be removed")
+
+readme = (ROOT / "README.md").read_text()
+if "На **Linux**, **Windows** и **macOS** расширение устанавливается из ZIP:" not in readme:
+    fail("README must document unpacked extension installation for Linux")
+if ".crx" in readme.lower():
+    fail("README must no longer describe CRX installation or updates")
 
 tray_main = ROOT / "helper/trayapp/main.go"
 about_icon = ROOT / "helper/trayapp/assets/about.png"

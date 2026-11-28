@@ -586,12 +586,6 @@ func readPackagedExtensionVersion(dataDir string) (string, error) {
 		}
 	}
 	if err != nil {
-		executable, exeErr := os.Executable()
-		if exeErr == nil {
-			data, err = os.ReadFile(filepath.Join(filepath.Dir(executable), "vless-eevee.crx.version"))
-		}
-	}
-	if err != nil {
 		return "", fmt.Errorf("не удалось прочитать версию расширения: %w", err)
 	}
 	version := strings.TrimSpace(string(data))

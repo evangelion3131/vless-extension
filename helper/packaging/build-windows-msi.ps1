@@ -47,14 +47,6 @@ try {
     Expand-Archive -Path $XrayArchive -DestinationPath $TempDir
     Copy-Item (Join-Path $TempDir "xray.exe"), (Join-Path $TempDir "geoip.dat"), (Join-Path $TempDir "geosite.dat") $PayloadDir
 
-    $CrxBuilder = Join-Path $PSScriptRoot "build-extension-crx.sh"
-    if (-not (Get-Command bash -ErrorAction SilentlyContinue)) {
-        throw "A Bash-capable environment is required to package the CRX."
-    }
-    $Env:VLESS_EEVEE_KEY_FILE = $env:VLESS_EEVEE_KEY_FILE
-    & bash $CrxBuilder (Join-Path $PayloadDir "vless-eevee.crx") $env:VLESS_EEVEE_KEY_FILE
-    if ($LASTEXITCODE -ne 0) { throw "CRX packaging failed." }
-
     $NativeManifest = @{
         name            = $HostName
         description     = "vless-eevee helper"
