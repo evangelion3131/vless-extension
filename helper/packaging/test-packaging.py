@@ -50,6 +50,8 @@ if 'cd "$REPO_ROOT/helper"\n  # Use libc/NSS DNS resolution' not in linux_text o
     fail("Linux helper must use the system DNS resolver")
 if 'OUTPUT="$REPO_ROOT/dist/vless-eevee.v${VERSION}.linux.${ARCH}.deb"' not in linux_text:
     fail("Linux package output must include its version and architecture")
+if "VLESS_EEVEE_CRX_FILE" not in linux_text:
+    fail("Linux package must support the shared signed extension artifact")
 if "vless-eevee.crx" not in linux_text:
     fail("Linux package does not include extension CRX")
 if "trayapp" not in linux_text or "vless-eevee-tray.desktop" not in linux_text:
@@ -106,6 +108,8 @@ workflow = (ROOT / ".github/workflows/build-installers.yml").read_text()
 if "vless-eevee.extension.crx" not in workflow or "vless-eevee-updates.xml" not in workflow:
     fail("release workflow is missing extension update assets")
 for expected in (
+    "installer-extension-crx",
+    "needs: extension",
     'target="dist/vless-eevee.${TAG}.linux.${architecture}.deb"',
     'target="dist/vless-eevee.${TAG}.windows.x64.msi"',
     'if tag != f"v{version}":',

@@ -15,7 +15,26 @@ permissions:
   contents: read
 
 jobs:
+  extension:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Chromium packaging browser
+        run: sudo apt-get update && sudo apt-get install -y chromium-browser
+      - name: Build signed extension
+        run: |
+          mkdir -p dist
+          bash helper/packaging/build-extension-crx.sh dist/vless-eevee.extension.crx
+        env:
+          VLESS_EEVEE_KEY_B64: ${{ secrets.VLESS_EEVEE_KEY_B64 }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-extension-crx
+          path: dist/vless-eevee.extension.crx
+          if-no-files-found: error
+
   linux:
+    needs: extension
     strategy:
       fail-fast: false
       matrix:
@@ -30,24 +49,21 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: helper/go.mod
-      - name: Install Chromium packaging browser
-        run: sudo apt-get update && sudo apt-get install -y chromium-browser libgtk-3-dev libayatana-appindicator3-dev
+      - uses: actions/download-artifact@v4
+        with:
+          name: installer-extension-crx
+          path: dist
+      - name: Install Linux tray build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libayatana-appindicator3-dev
       - name: Build Debian package
         run: bash helper/packaging/build-linux-deb.sh "${{ matrix.arch }}"
         env:
-          VLESS_EEVEE_KEY_B64: ${{ secrets.VLESS_EEVEE_KEY_B64 }}
+          VLESS_EEVEE_CRX_FILE: dist/vless-eevee.extension.crx
       - uses: actions/upload-artifact@v4
         with:
           name: installer-linux-${{ matrix.arch }}
           path: dist/*.deb
           if-no-files-found: error
-      - uses: actions/upload-artifact@v4
-        if: matrix.arch == 'amd64'
-        with:
-          name: installer-extension-crx
-          path: dist/vless-eevee.extension.crx
-          if-no-files-found: error
-
   windows:
     runs-on: windows-latest
     steps:

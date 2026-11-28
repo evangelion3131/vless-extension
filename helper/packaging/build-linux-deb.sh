@@ -50,10 +50,19 @@ unzip -j -o "$TMP_DIR/xray.zip" xray geoip.dat geosite.dat -d "$APP_DIR"
 chmod 755 "$APP_DIR/helper" "$APP_DIR/xray"
 
 CRX_OUTPUT="$TMP_DIR/vless-eevee.crx"
-"$SCRIPT_DIR/build-extension-crx.sh" "$CRX_OUTPUT" "${VLESS_EEVEE_KEY_FILE:-}"
+if [ -n "${VLESS_EEVEE_CRX_FILE:-}" ]; then
+  if [ ! -f "$VLESS_EEVEE_CRX_FILE" ]; then
+    echo "VLESS_EEVEE_CRX_FILE does not exist: $VLESS_EEVEE_CRX_FILE" >&2
+    exit 1
+  fi
+  cp "$VLESS_EEVEE_CRX_FILE" "$CRX_OUTPUT"
+  printf '%s\n' "$VERSION" > "${CRX_OUTPUT}.version"
+else
+  "$SCRIPT_DIR/build-extension-crx.sh" "$CRX_OUTPUT" "${VLESS_EEVEE_KEY_FILE:-}"
+fi
 cp "$CRX_OUTPUT" "$APP_DIR/vless-eevee.crx"
 cp "${CRX_OUTPUT}.version" "$APP_DIR/extension-version.txt"
-if [ "$ARCH" = amd64 ]; then
+if [ "$ARCH" = amd64 ] && [ -z "${VLESS_EEVEE_CRX_FILE:-}" ]; then
   mkdir -p "$REPO_ROOT/dist"
   cp "$CRX_OUTPUT" "$REPO_ROOT/dist/vless-eevee.extension.crx"
 fi
