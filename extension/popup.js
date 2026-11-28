@@ -7,7 +7,6 @@ import {
 
 const $ = (id) => document.getElementById(id);
 const statusDot = $("statusDot");
-const statusLabel = $("statusLabel");
 const settingsBtn = $("settingsBtn");
 const appView = $("appView");
 const settingsView = $("settingsView");
@@ -40,6 +39,8 @@ const optInterval = $("optInterval");
 const optUpdateOnStart = $("optUpdateOnStart");
 const optAutoConnect = $("optAutoConnect");
 const optShowTech = $("optShowTech");
+const optSpeedTestMB = $("optSpeedTestMB");
+const optSpeedTimeoutSeconds = $("optSpeedTimeoutSeconds");
 const bypassHostInput = $("bypassHostInput");
 const bypassHostAddBtn = $("bypassHostAddBtn");
 const bypassHostsList = $("bypassHostsList");
@@ -50,6 +51,9 @@ const importBox = $("importBox");
 const importText = $("importText");
 const importApplyBtn = $("importApplyBtn");
 const resetBtn = $("resetBtn");
+const helperVersionValue = $("helperVersionValue");
+const extensionVersionValue = $("extensionVersionValue");
+const versionWarning = $("versionWarning");
 
 // ---------- состояние ----------
 
@@ -68,6 +72,8 @@ let busy = false;
 let inSettings = false;
 let renamingId = null;
 let favSet = new Set();
+let versionCheckId = 0;
+let storageSyncId = 0;
 
 // ---------- иконки ----------
 
@@ -210,7 +216,6 @@ async function checkHelperAndRoute() {
 async function enterApp() {
   onboard.hidden = true;
   settingsBtn.hidden = false;
-  statusLabel.style.visibility = "";
   setView(inSettings ? "settings" : "main");
 
   await migrate();
@@ -246,7 +251,6 @@ function enterOnboarding() {
   settingsView.hidden = true;
   onboard.hidden = false;
   settingsBtn.hidden = true;
-  statusLabel.style.visibility = "hidden"; // «выключено» на экране установки ни к чему
 }
 
 function setView(name) {
@@ -255,7 +259,31 @@ function setView(name) {
   settingsView.hidden = !inSettings;
   settingsBtn.setAttribute("aria-pressed", String(inSettings));
   settingsBtn.title = inSettings ? "Закрыть настройки" : "Настройки";
-  if (inSettings) syncSettingsUI();
+  if (inSettings) {
+    syncSettingsUI();
+    refreshComponentVersions();
+  }
+}
+
+async function refreshComponentVersions() {
+  const checkId = ++versionCheckId;
+  const extensionVersion = chrome.runtime.getManifest().version;
+  helperVersionValue.textContent = "Проверяю…";
+  extensionVersionValue.textContent = `v${extensionVersion}`;
+  versionWarning.hidden = true;
+  const result = await send({ cmd: "componentVersions" });
+  if (checkId !== versionCheckId || !inSettings) return;
+  if (!result.ok || !result.helperVersion) {
+    helperVersionValue.textContent = "не определена";
+    versionWarning.textContent = `Не удалось получить версию helper: ${result.error || "нет ответа"}`;
+    versionWarning.hidden = false;
+    return;
+  }
+  helperVersionValue.textContent = `v${result.helperVersion}`;
+  if (result.helperVersion !== extensionVersion) {
+    versionWarning.textContent = "Версии helper и расширения не совпадают. Обновите компонент, версия которого отличается.";
+    versionWarning.hidden = false;
+  }
 }
 
 // Настраивает тексты/ссылку под ОС и вешает «Проверить снова».
@@ -305,7 +333,6 @@ function render() {
 
 function renderStatus() {
   statusDot.classList.toggle("on", connected);
-  statusLabel.textContent = connected ? "подключено" : "выключено";
   const label = connected ? "Отключить" : "Подключить";
   toggleBtn.title = label;
   toggleBtn.setAttribute("aria-label", label);
@@ -612,7 +639,7 @@ function buildRow(g, s) {
   } else {
     speed.classList.add("idle");
     speed.innerHTML = icon("speed");
-    speed.title = "Измерить скорость скачивания (5 МБ)";
+    speed.title = `Измерить скорость скачивания (${data.settings.speedTestMB} МБ)`;
   }
   speed.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -845,6 +872,13 @@ async function addFromInput() {
     const res = await send({ cmd: "addSub", url: value });
     addBtn.disabled = false;
     if (res.ok) {
+      const syncId = ++storageSyncId;
+      const latest = await loadAll();
+      if (syncId === storageSyncId) {
+        data = latest;
+        ensureSelection();
+        render();
+      }
       linkInput.value = "";
       toast(
         res.existed
@@ -929,6 +963,8 @@ function syncSettingsUI() {
   optUpdateOnStart.checked = s.updateOnStart;
   optAutoConnect.checked = s.autoConnect;
   optShowTech.checked = s.showTech;
+  optSpeedTestMB.value = String(s.speedTestMB);
+  optSpeedTimeoutSeconds.value = String(s.speedTimeoutSeconds);
 
   for (const control of [optInterval, optUpdateOnStart]) {
     control.disabled = !s.autoUpdate;
@@ -1086,8 +1122,26 @@ async function onReset() {
   resetBtn.textContent = "Сбросить";
   resetBtn.classList.remove("armed");
   const res = await send({ cmd: "resetAll" });
-  if (res.ok) toast("Данные сброшены", { kind: "success" });
-  else toast(res.error || "Не удалось сбросить данные", { kind: "error" });
+  if (res.ok) {
+    storageSyncId++;
+    data.subs = [];
+    data.manual = [];
+    data.selected = null;
+    data.favorites = [];
+    data.settings = { ...DEFAULT_SETTINGS };
+    data.ui = { expanded: {} };
+    connected = false;
+    activeServer = null;
+    errorLine.textContent = "";
+    pings = { running: false, results: {} };
+    speeds = { running: false, results: {} };
+    refreshing = new Set();
+    ensureSelection();
+    render();
+    toast("Данные сброшены", { kind: "success" });
+  } else {
+    toast(res.error || "Не удалось сбросить данные", { kind: "error" });
+  }
 }
 
 // ---------- события ----------
@@ -1127,6 +1181,8 @@ function bindEvents() {
   optUpdateOnStart.addEventListener("change", () => saveSetting({ updateOnStart: optUpdateOnStart.checked }));
   optAutoConnect.addEventListener("change", () => saveSetting({ autoConnect: optAutoConnect.checked }));
   optShowTech.addEventListener("change", () => saveSetting({ showTech: optShowTech.checked }));
+  optSpeedTestMB.addEventListener("change", () => saveSetting({ speedTestMB: Number(optSpeedTestMB.value) }));
+  optSpeedTimeoutSeconds.addEventListener("change", () => saveSetting({ speedTimeoutSeconds: Number(optSpeedTimeoutSeconds.value) }));
   refreshNowBtn.addEventListener("click", refreshAll);
   exportBtn.addEventListener("click", copyBackup);
   importToggleBtn.addEventListener("click", () => {
@@ -1139,7 +1195,7 @@ function bindEvents() {
   chrome.storage.onChanged.addListener(onStorageChanged);
 }
 
-function onStorageChanged(changes, area) {
+async function onStorageChanged(changes, area) {
   if (area === "session") {
     if (changes.pings) pings = changes.pings.newValue || { running: false, results: {} };
     if (changes.speeds) speeds = changes.speeds.newValue || { running: false, results: {} };
@@ -1149,26 +1205,24 @@ function onStorageChanged(changes, area) {
   }
   if (area !== "local") return;
 
-  let touched = false;
-  if (changes.subs) { data.subs = changes.subs.newValue || []; touched = true; }
-  if (changes.manual) { data.manual = changes.manual.newValue || []; touched = true; }
-  if (changes.selected) { data.selected = changes.selected.newValue || null; touched = true; }
-  if (changes.favorites) { data.favorites = changes.favorites.newValue || []; touched = true; }
-  if (changes.settings) { data.settings = sanitizeSettings(changes.settings.newValue); touched = true; }
-  if (changes.ui) {
-    // состояние раскрытия уже применено на месте — перерисовка не нужна
-    const ui = changes.ui.newValue || {};
-    data.ui = { ...ui, expanded: ui.expanded || {} };
-  }
-  if (changes.state) {
-    const state = changes.state.newValue || {};
-    connected = !!state.connected;
-    activeServer = state.server || null;
-    errorLine.textContent = state.error || "";
-    touched = true;
-  }
-  if (touched) {
+  const syncId = ++storageSyncId;
+  try {
+    const [latest, local] = await Promise.all([
+      loadAll(),
+      chrome.storage.local.get("state")
+    ]);
+    if (syncId !== storageSyncId) return;
+
+    data = latest;
+    if (changes.state) {
+      const state = local.state || {};
+      connected = !!state.connected;
+      activeServer = state.server || null;
+      errorLine.textContent = state.error || "";
+    }
     ensureSelection();
     render();
+  } catch (error) {
+    console.error("Не удалось синхронизировать хранилище:", error);
   }
 }

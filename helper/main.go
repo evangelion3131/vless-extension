@@ -32,13 +32,16 @@ import (
 )
 
 type request struct {
-	ID       int             `json:"id"`
-	Cmd      string          `json:"cmd"`
-	Link     string          `json:"link,omitempty"`   // vless:// ссылка
-	Config   json.RawMessage `json:"config,omitempty"` // готовый конфиг xray
-	URL      string          `json:"url,omitempty"`    // адрес подписки для fetchSub
-	ClientID string          `json:"clientId,omitempty"`
-	Server   *serverMetadata `json:"server,omitempty"`
+	ID                  int             `json:"id"`
+	Cmd                 string          `json:"cmd"`
+	Link                string          `json:"link,omitempty"`   // vless:// ссылка
+	Config              json.RawMessage `json:"config,omitempty"` // готовый конфиг xray
+	URL                 string          `json:"url,omitempty"`    // адрес подписки для fetchSub
+	Version             string          `json:"version,omitempty"`
+	ClientID            string          `json:"clientId,omitempty"`
+	Server              *serverMetadata `json:"server,omitempty"`
+	SpeedTestMB         int             `json:"speedTestMB,omitempty"`
+	SpeedTimeoutSeconds int             `json:"speedTimeoutSeconds,omitempty"`
 }
 
 type serverMetadata struct {
@@ -56,6 +59,7 @@ type serverMetadata struct {
 type response struct {
 	ID              int             `json:"id"`
 	OK              bool            `json:"ok"`
+	Version         string          `json:"version,omitempty"`
 	Port            int             `json:"port,omitempty"`
 	Error           string          `json:"error,omitempty"`
 	State           string          `json:"state,omitempty"`
@@ -66,6 +70,8 @@ type response struct {
 	MS              int             `json:"ms,omitempty"` // задержка через туннель, мс (latency)
 	SpeedMbps       float64         `json:"speedMbps,omitempty"`
 }
+
+var appVersion = "dev"
 
 var (
 	xrayCmd       *exec.Cmd
@@ -187,6 +193,9 @@ func newClientID() (string, error) {
 }
 
 func callDaemon(req request) (response, bool) {
+	if req.Cmd == "version" {
+		return response{}, false
+	}
 	data, err := json.Marshal(req)
 	if err != nil {
 		return response{}, false
@@ -231,33 +240,17 @@ func runDaemon() error {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(handle(req))
 	})
-	mux.HandleFunc("/updates.xml", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/extension/version", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
 		dir, err := workDir()
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		version, err := readExtensionVersion(dir)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
-			return
-		}
-		w.Header().Set("Content-Type", "text/xml")
-		fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?>
-<gupdate xmlns="http://www.google.com/update2/response">
-  <app appid="pflnlemikfjdffpkadjjemologkalkcl">
-    <updatecheck codebase="http://127.0.0.1:17837/vless-eevee.crx" version="%s"/>
-  </app>
-</gupdate>
-`, version)
-	})
-	mux.HandleFunc("/vless-eevee.crx", func(w http.ResponseWriter, r *http.Request) {
-		dir, err := workDir()
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		http.ServeFile(w, r, filepath.Join(dir, "vless-eevee.crx"))
+		http.ServeFile(w, r, filepath.Join(dir, "installed-extension-version.txt"))
 	})
 	server := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	mux.HandleFunc("/shutdown", func(w http.ResponseWriter, r *http.Request) {
@@ -267,20 +260,10 @@ func runDaemon() error {
 	return server.Serve(listener)
 }
 
-func readExtensionVersion(dir string) (string, error) {
-	data, err := os.ReadFile(filepath.Join(dir, "extension-version.txt"))
-	if err != nil {
-		return "", err
-	}
-	version := strings.TrimSpace(string(data))
-	if version == "" {
-		return "", fmt.Errorf("empty extension version")
-	}
-	return version, nil
-}
-
 func handle(req request) response {
 	switch req.Cmd {
+	case "version":
+		return response{ID: req.ID, OK: true, Version: appVersion}
 	case "start", "stop", "status", "release":
 		handleMu.Lock()
 		defer handleMu.Unlock()
@@ -299,14 +282,61 @@ func handle(req request) response {
 		}
 		return response{ID: req.ID, OK: true, MS: ms}
 	case "speed":
-		mbps, err := measureSpeed(req.Link, req.Config, req.Server)
+		mbps, err := measureSpeed(req.Link, req.Config, req.Server, req.SpeedTestMB, req.SpeedTimeoutSeconds)
 		if err != nil {
 			return response{ID: req.ID, OK: false, Error: err.Error()}
 		}
 		return response{ID: req.ID, OK: true, SpeedMbps: mbps}
+	case "extensionVersion":
+		if err := recordExtensionVersion(req.Version); err != nil {
+			return response{ID: req.ID, OK: false, Error: err.Error()}
+		}
+		return response{ID: req.ID, OK: true}
 	default:
 		return response{ID: req.ID, OK: false, Error: "unknown command: " + req.Cmd}
 	}
+}
+
+func recordExtensionVersion(version string) error {
+	parts := strings.Split(version, ".")
+	if len(parts) != 3 {
+		return fmt.Errorf("invalid extension version %q", version)
+	}
+	for _, part := range parts {
+		if part == "" {
+			return fmt.Errorf("invalid extension version %q", version)
+		}
+		for _, digit := range part {
+			if digit < '0' || digit > '9' {
+				return fmt.Errorf("invalid extension version %q", version)
+			}
+		}
+		value, err := strconv.Atoi(part)
+		if err != nil || value < 0 {
+			return fmt.Errorf("invalid extension version %q", version)
+		}
+	}
+	dir, err := workDir()
+	if err != nil {
+		return err
+	}
+	file, err := os.CreateTemp(dir, "installed-extension-version-*")
+	if err != nil {
+		return fmt.Errorf("create extension version file: %w", err)
+	}
+	tmpPath := file.Name()
+	defer os.Remove(tmpPath)
+	if _, err := fmt.Fprintln(file, version); err != nil {
+		file.Close()
+		return fmt.Errorf("write extension version: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close extension version: %w", err)
+	}
+	if err := os.Rename(tmpPath, filepath.Join(dir, "installed-extension-version.txt")); err != nil {
+		return fmt.Errorf("activate extension version: %w", err)
+	}
+	return nil
 }
 
 func handleConnectionRequest(req request) response {
@@ -485,15 +515,34 @@ func measureLatency(link string, raw json.RawMessage, selected *serverMetadata) 
 	return socks5Get(port, "cp.cloudflare.com", 80, "/generate_204", 6*time.Second)
 }
 
-const speedTestBytes = 5 * 1024 * 1024
+const (
+	defaultSpeedTestMB         = 1
+	defaultSpeedTimeoutSeconds = 3
+)
 
-func measureSpeed(link string, raw json.RawMessage, selected *serverMetadata) (float64, error) {
+func normalizeSpeedTestOptions(sizeMB, timeoutSeconds int) (int, time.Duration) {
+	switch sizeMB {
+	case 1, 5, 10, 50:
+	default:
+		sizeMB = defaultSpeedTestMB
+	}
+	switch timeoutSeconds {
+	case 1, 2, 3, 5, 10:
+	default:
+		timeoutSeconds = defaultSpeedTimeoutSeconds
+	}
+	return sizeMB, time.Duration(timeoutSeconds) * time.Second
+}
+
+func measureSpeed(link string, raw json.RawMessage, selected *serverMetadata, sizeMB, timeoutSeconds int) (float64, error) {
+	sizeMB, timeout := normalizeSpeedTestOptions(sizeMB, timeoutSeconds)
 	port, cleanup, err := startTestProxy(link, raw, selected, "speed")
 	if err != nil {
 		return 0, err
 	}
 	defer cleanup()
-	return socks5Download(port, "speed.cloudflare.com", "/__down?bytes=5242880", speedTestBytes, 30*time.Second)
+	sizeBytes := sizeMB * 1024 * 1024
+	return socks5Download(port, "speed.cloudflare.com", fmt.Sprintf("/__down?bytes=%d", sizeBytes), sizeBytes, timeout)
 }
 
 func startTestProxy(link string, raw json.RawMessage, selected *serverMetadata, purpose string) (int, func(), error) {

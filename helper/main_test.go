@@ -60,6 +60,40 @@ func TestWorkDirHonorsWorkerDataDir(t *testing.T) {
 	}
 }
 
+func TestRecordExtensionVersion(t *testing.T) {
+	dir := t.TempDir()
+	old := workerDataDir
+	workerDataDir = dir
+	t.Cleanup(func() { workerDataDir = old })
+
+	if err := recordExtensionVersion("1.2.3"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, "installed-extension-version.txt")); err != nil || string(got) != "1.2.3\n" {
+		t.Fatalf("recorded version = %q, err = %v", got, err)
+	}
+	if err := recordExtensionVersion("../1.2.3"); err == nil {
+		t.Fatal("invalid extension version was accepted")
+	}
+}
+
+func TestHandleVersion(t *testing.T) {
+	old := appVersion
+	appVersion = "1.2.3"
+	t.Cleanup(func() { appVersion = old })
+
+	got := handle(request{ID: 7, Cmd: "version"})
+	if !got.OK || got.ID != 7 || got.Version != "1.2.3" {
+		t.Fatalf("handle(version) = %+v", got)
+	}
+}
+
+func TestVersionDoesNotUseRunningDaemon(t *testing.T) {
+	if _, ok := callDaemon(request{Cmd: "version"}); ok {
+		t.Fatal("version request was delegated to the daemon")
+	}
+}
+
 func TestFetchSubReturnsHeaders(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Profile-Title", "Example subscription")
@@ -108,6 +142,31 @@ func TestMeasureHTTPSDownloadReadsBoundedPayload(t *testing.T) {
 	}
 	if mbps <= 0 || math.IsInf(mbps, 0) || math.IsNaN(mbps) {
 		t.Fatalf("measured speed = %v Mbps, want a finite positive value", mbps)
+	}
+}
+
+func TestNormalizeSpeedTestOptions(t *testing.T) {
+	tests := []struct {
+		name        string
+		sizeMB      int
+		timeoutSecs int
+		wantSizeMB  int
+		wantTimeout time.Duration
+	}{
+		{name: "defaults", wantSizeMB: 1, wantTimeout: 3 * time.Second},
+		{name: "custom values", sizeMB: 10, timeoutSecs: 5, wantSizeMB: 10, wantTimeout: 5 * time.Second},
+		{name: "largest size", sizeMB: 50, timeoutSecs: 10, wantSizeMB: 50, wantTimeout: 10 * time.Second},
+		{name: "invalid size uses default", sizeMB: 20, timeoutSecs: 5, wantSizeMB: 1, wantTimeout: 5 * time.Second},
+		{name: "invalid timeout uses default", sizeMB: 5, timeoutSecs: 4, wantSizeMB: 5, wantTimeout: 3 * time.Second},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotSizeMB, gotTimeout := normalizeSpeedTestOptions(tt.sizeMB, tt.timeoutSecs)
+			if gotSizeMB != tt.wantSizeMB || gotTimeout != tt.wantTimeout {
+				t.Fatalf("normalizeSpeedTestOptions() = (%d, %s), want (%d, %s)",
+					gotSizeMB, gotTimeout, tt.wantSizeMB, tt.wantTimeout)
+			}
+		})
 	}
 }
 

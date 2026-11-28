@@ -14,7 +14,7 @@ const ALARM = "subs-tick";
 const TICK_MINUTES = 15;            // как часто проверяем, не пора ли обновить подписки
 const RETRY_MS = 15 * 60 * 1000;    // после неудачи повторяем не чаще
 const LATENCY_TIMEOUT_MS = 20000;
-const SPEED_TIMEOUT_MS = 50000;
+const SPEED_SETUP_TIMEOUT_MS = 5000;
 
 let nativePort = null; // держит service worker живым, пока соединение открыто (Chrome 116+)
 let pending = new Map(); // id -> resolve
@@ -222,6 +222,7 @@ async function autoConnect() {
 // ---------- подписки ----------
 
 const refreshJobs = new Map(); // id -> Promise
+let subscriptionResetGeneration = 0;
 
 function publishRefreshing() {
   return chrome.storage.session.set({ refreshing: [...refreshJobs.keys()] });
@@ -232,7 +233,8 @@ const fetchViaHelper = (url) => callHelper("fetchSub", { url }, 20000);
 // Обновляет одну подписку. Параллельные вызовы для одной подписки склеиваются.
 function refreshSub(id) {
   if (refreshJobs.has(id)) return refreshJobs.get(id);
-  const job = doRefresh(id).finally(() => {
+  const generation = subscriptionResetGeneration;
+  const job = doRefresh(id, generation).finally(() => {
     refreshJobs.delete(id);
     publishRefreshing();
   });
@@ -241,13 +243,19 @@ function refreshSub(id) {
   return job;
 }
 
-async function doRefresh(id) {
+async function doRefresh(id, generation) {
+  if (generation !== subscriptionResetGeneration) {
+    return { ok: false, error: "данные сброшены" };
+  }
   const { subs } = await loadAll();
   const sub = subs.find((s) => s.id === id);
   if (!sub) return { ok: false, error: "подписка не найдена" };
 
   try {
     const parsed = await fetchSubscription(sub.url, fetchViaHelper);
+    if (generation !== subscriptionResetGeneration) {
+      return { ok: false, error: "данные сброшены" };
+    }
     const now = Date.now();
     await mutate(["subs", "selected"], (d) => {
       const s = d.subs.find((x) => x.id === id);
@@ -293,22 +301,24 @@ async function addSub(raw) {
   const fresh = createSub(raw);
 
   // Подписка появляется в списке сразу (развёрнутой), пока идёт загрузка.
-  const existingId = await mutate(["subs", "ui"], (d) => {
+  const existing = await mutate(["subs", "ui"], (d) => {
     const found = d.subs.find((s) => s.url === fresh.url);
     if (found) {
       d.ui.expanded[found.id] = true;
-      return found.id;
+      return { id: found.id, hadServers: (found.servers || []).length > 0 };
     }
     d.subs.push(fresh);
     d.ui.expanded[fresh.id] = true;
     return null;
   });
 
+  const existingId = existing?.id || null;
   const id = existingId || fresh.id;
   const res = await refreshSub(id);
 
-  if (!res.ok && !existingId) {
-    // первая загрузка не удалась — не оставляем пустую подписку
+  if (!res.ok && (!existingId || !existing.hadServers)) {
+    // Пустая или неудачно загруженная запись не считается валидной подпиской.
+    // Удаляем её, чтобы повторная попытка с тем же URL была новой, а не "уже добавленной".
     await mutate(["subs", "ui"], (d) => {
       d.subs = d.subs.filter((s) => s.id !== id);
       delete d.ui.expanded[id];
@@ -316,7 +326,7 @@ async function addSub(raw) {
     return res;
   }
   const sub = (await loadAll()).subs.find((s) => s.id === id);
-  return { ...res, id, existed: !!existingId, name: sub ? subName(sub) : "" };
+  return { ...res, id, existed: !!existingId && !!existing.hadServers, name: sub ? subName(sub) : "" };
 }
 
 async function refreshAll({ onlyDue }) {
@@ -416,7 +426,8 @@ async function runMeasurementLoop() {
       activeMeasurement = { kind, ref };
       const id = pingId(ref);
       const state = await getMeasurementState(kind);
-      const server = findServer(await loadAll(), ref);
+      const currentData = await loadAll();
+      const server = findServer(currentData, ref);
       if (!server) {
         delete state.results[id];
         activeMeasurement = null;
@@ -427,13 +438,24 @@ async function runMeasurementLoop() {
       state.results[id] = { state: "measuring" };
       await saveMeasurementState(kind, state);
 
-      const payload = server.kind === "config"
-        ? { config: server.config, server: serverMetadata(server) }
-        : { link: server.raw };
+      const payload = {
+        ...(server.kind === "config"
+          ? { config: server.config, server: serverMetadata(server) }
+          : { link: server.raw }),
+        ...(kind === "speed"
+          ? {
+              speedTestMB: currentData.settings.speedTestMB,
+              speedTimeoutSeconds: currentData.settings.speedTimeoutSeconds
+            }
+          : {})
+      };
+      const timeoutMs = kind === "speed"
+        ? currentData.settings.speedTimeoutSeconds * 1000 + SPEED_SETUP_TIMEOUT_MS
+        : LATENCY_TIMEOUT_MS;
       const res = await callHelper(
         kind === "speed" ? "speed" : "latency",
         payload,
-        kind === "speed" ? SPEED_TIMEOUT_MS : LATENCY_TIMEOUT_MS
+        timeoutMs
       );
       activeMeasurement = null;
       state.results[id] = kind === "speed"
@@ -503,8 +525,13 @@ async function importBackup(data) {
 }
 
 async function resetAll() {
+  subscriptionResetGeneration++;
+  refreshJobs.clear();
   await withLock(() =>
-    chrome.storage.local.remove(["subs", "manual", "selected", "favorites", "settings", "ui", "lastConnected"])
+    chrome.storage.local.remove([
+      "subs", "manual", "selected", "favorites", "settings", "ui",
+      "lastConnected", "state"
+    ])
   );
   await stopMeasurements("ping");
   await stopMeasurements("speed");
@@ -514,6 +541,7 @@ async function resetAll() {
   const s = await getSpeeds();
   s.results = {};
   await saveSpeeds(s);
+  await chrome.storage.session.remove("refreshing");
   return { ok: true };
 }
 
@@ -537,6 +565,15 @@ async function handleMessage(req) {
       await syncGlobalState(res);
       if (res.ok) startSyncTimer();
       return res;
+    }
+    case "componentVersions": {
+      const helper = await callHelper("version", {}, 4000);
+      return {
+        ok: helper.ok,
+        helperVersion: helper.version || "",
+        extensionVersion: chrome.runtime.getManifest().version,
+        error: helper.error || ""
+      };
     }
     case "addSub":
       return addSub(req.url);
@@ -585,6 +622,7 @@ async function handleMessage(req) {
 
 async function startupRoutine() {
   await migrate();
+  await reportExtensionVersion();
   const status = await syncGlobalState(); // общий helper мог остаться подключённым
   if (status.ok) startSyncTimer();
 
@@ -594,6 +632,13 @@ async function startupRoutine() {
   if (settings.autoUpdate && settings.updateOnStart) await refreshAll({ onlyDue: false });
 }
 
+async function reportExtensionVersion() {
+  const res = await callHelper("extensionVersion", {
+    version: chrome.runtime.getManifest().version
+  }, 5000);
+  if (!res.ok) console.warn("Не удалось сообщить helper версию расширения:", res.error);
+}
+
 chrome.runtime.onStartup.addListener(() => {
   startupRoutine().catch((e) => console.error("startup:", e));
 });
@@ -601,6 +646,7 @@ chrome.runtime.onStartup.addListener(() => {
 chrome.runtime.onInstalled.addListener(() => {
   migrate().catch(() => {});
   ensureAlarm();
+  reportExtensionVersion().catch((e) => console.error("extension version:", e));
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {

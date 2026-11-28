@@ -19,11 +19,15 @@ export const DEFAULT_SETTINGS = {
   updateOnStart: true,
   autoConnect: false,
   showTech: true,
+  speedTestMB: 1,
+  speedTimeoutSeconds: 3,
   sort: "default", // "default" | "ping" | "speed"
   bypassHosts: []
 };
 
 export const INTERVALS = [1, 2, 4, 6, 12, 24];
+const SPEED_TEST_SIZES_MB = [1, 5, 10, 50];
+const SPEED_TIMEOUT_OPTIONS_SECONDS = [1, 2, 3, 5, 10];
 
 const KEYS = ["subs", "manual", "selected", "favorites", "settings", "ui"];
 
@@ -34,6 +38,14 @@ export function sanitizeSettings(s) {
     if (typeof s[k] === "boolean") out[k] = s[k];
   }
   if (INTERVALS.includes(Number(s.intervalHours))) out.intervalHours = Number(s.intervalHours);
+  const speedTestMB = Number(s.speedTestMB);
+  if (SPEED_TEST_SIZES_MB.includes(speedTestMB)) {
+    out.speedTestMB = speedTestMB;
+  }
+  const speedTimeoutSeconds = Number(s.speedTimeoutSeconds);
+  if (SPEED_TIMEOUT_OPTIONS_SECONDS.includes(speedTimeoutSeconds)) {
+    out.speedTimeoutSeconds = speedTimeoutSeconds;
+  }
   if (s.sort === "ping" || s.sort === "speed" || s.sort === "default") out.sort = s.sort;
   if (Array.isArray(s.bypassHosts)) {
     out.bypassHosts = [...new Set(s.bypassHosts.map(normalizeBypassHost).filter(Boolean))];

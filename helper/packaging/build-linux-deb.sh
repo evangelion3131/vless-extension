@@ -31,7 +31,16 @@ mkdir -p "$APP_DIR"
 
 (
   cd "$REPO_ROOT/helper"
-  CGO_ENABLED=0 GOOS=linux GOARCH="$GOARCH" go build -o "$APP_DIR/helper" .
+  # Use libc/NSS DNS resolution so Linux follows the system resolver configuration.
+  CGO_ENABLED=1 GOOS=linux GOARCH="$GOARCH" go build \
+    -ldflags "-X main.appVersion=$VERSION" \
+    -o "$APP_DIR/helper" .
+)
+(
+  cd "$REPO_ROOT/helper/trayapp"
+  CGO_ENABLED=1 GOOS=linux GOARCH="$GOARCH" go build \
+    -ldflags "-X main.appVersion=$VERSION" \
+    -o "$APP_DIR/tray" .
 )
 
 curl --fail --location --retry 3 \
@@ -44,6 +53,10 @@ CRX_OUTPUT="$TMP_DIR/vless-eevee.crx"
 "$SCRIPT_DIR/build-extension-crx.sh" "$CRX_OUTPUT" "${VLESS_EEVEE_KEY_FILE:-}"
 cp "$CRX_OUTPUT" "$APP_DIR/vless-eevee.crx"
 cp "${CRX_OUTPUT}.version" "$APP_DIR/extension-version.txt"
+if [ "$ARCH" = amd64 ]; then
+  mkdir -p "$REPO_ROOT/dist"
+  cp "$CRX_OUTPUT" "$REPO_ROOT/dist/vless-eevee.extension.crx"
+fi
 
 mkdir -p "$PACKAGE_ROOT/var/lib/vless-eevee"
 cp "$APP_DIR/vless-eevee.crx" "$PACKAGE_ROOT/var/lib/vless-eevee/vless-eevee.crx"
@@ -65,6 +78,31 @@ RestartSec=2
 WantedBy=multi-user.target
 EOF
 
+mkdir -p "$PACKAGE_ROOT/etc/xdg/autostart"
+mkdir -p "$PACKAGE_ROOT/usr/share/pixmaps"
+cp "$REPO_ROOT/extension/icons/icon128.png" "$PACKAGE_ROOT/usr/share/pixmaps/vless-eevee.png"
+cat > "$PACKAGE_ROOT/etc/xdg/autostart/vless-eevee-tray.desktop" << 'EOF'
+[Desktop Entry]
+Type=Application
+Name=vless-eevee
+Comment=vless-eevee update helper
+Exec=/opt/vless-eevee/tray -data-dir /var/lib/vless-eevee
+Icon=vless-eevee
+Terminal=false
+Categories=Network;
+EOF
+mkdir -p "$PACKAGE_ROOT/usr/share/applications"
+cat > "$PACKAGE_ROOT/usr/share/applications/vless-eevee.desktop" << 'EOF'
+[Desktop Entry]
+Type=Application
+Name=vless-eevee
+Comment=VLESS helper and update tray
+Exec=/opt/vless-eevee/tray -data-dir /var/lib/vless-eevee
+Icon=vless-eevee
+Terminal=false
+Categories=Network;
+EOF
+
 for host_dir in \
   "$PACKAGE_ROOT/etc/opt/chrome/native-messaging-hosts" \
   "$PACKAGE_ROOT/etc/chromium/native-messaging-hosts"; do
@@ -83,7 +121,6 @@ done
 mkdir -p "$PACKAGE_ROOT/DEBIAN"
 cp "$SCRIPT_DIR/linux/postinst" "$PACKAGE_ROOT/DEBIAN/postinst"
 cp "$SCRIPT_DIR/linux/prerm" "$PACKAGE_ROOT/DEBIAN/prerm"
-sed -i "s/external_version\": \"0\\.4\\.0\"/external_version\": \"$VERSION\"/" "$PACKAGE_ROOT/DEBIAN/postinst"
 chmod 755 "$PACKAGE_ROOT/DEBIAN/postinst" "$PACKAGE_ROOT/DEBIAN/prerm"
 cat > "$PACKAGE_ROOT/DEBIAN/control" << EOF
 Package: vless-eevee
@@ -92,6 +129,7 @@ Section: net
 Priority: optional
 Architecture: $ARCH
 Maintainer: vless-eevee
+Depends: libayatana-appindicator3-1
 Description: Native messaging helper for the vless-eevee browser extension
  Installs the vless-eevee helper and Xray core for Chrome, Chromium and Brave.
 EOF
@@ -99,8 +137,9 @@ find "$PACKAGE_ROOT" -type d -exec chmod 755 {} +
 find "$PACKAGE_ROOT" -type f -exec chmod 644 {} +
 chmod 755 "$APP_DIR/helper" "$APP_DIR/xray" \
   "$PACKAGE_ROOT/DEBIAN/postinst" "$PACKAGE_ROOT/DEBIAN/prerm"
+chmod 755 "$APP_DIR/tray"
 
 mkdir -p "$REPO_ROOT/dist"
-OUTPUT="$REPO_ROOT/dist/vless-eevee_${VERSION}_${ARCH}.deb"
+OUTPUT="$REPO_ROOT/dist/vless-eevee.v${VERSION}.linux.${ARCH}.deb"
 dpkg-deb --build --root-owner-group "$PACKAGE_ROOT" "$OUTPUT"
 echo "Created $OUTPUT"

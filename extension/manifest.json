@@ -1,9 +1,11 @@
 {
   "manifest_version": 3,
   "name": "vless-eevee",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "VLESS-прокси только для браузера. Вставьте ссылку-подписку или vless:// — IP меняется в браузере, система остаётся нетронутой.",
+  "short_description": "VLESS-прокси для браузера",
   "homepage_url": "https://github.com/evangelion3131/vless-extension",
+  "update_url": "https://github.com/evangelion3131/vless-extension/releases/latest/download/vless-eevee-updates.xml",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAyqlTJaeF2meAEvJEdd+IvVawY7ZVKksH5Ztf9hjodDOTv1y1ZcgtMBIR6BA+ZQFh/pVXgWWnewdUkNw/S14myZw9f4++GL5dLM3vczu4psMRP/syPfDOKVWhY2bFpkStIjYAZvuYRmH9rElCLE9J/fRMywJg6837chnMz8P2AikeHxhpwHE+ICsE7hN7J9YVzU5gySQrvCRGvK5qSIrOKFHmxb/cmrK+ls93NlIN62xxzSAol4fVW93H5P5932wia7OnT2EBLjU/DL4+b6UtgsZYJ9c1ed8Dkjmg45Xnz8fnr3FNI0r5dMwp9sALDOtIWDAbWFpGJlb90Y8G2WqkbQIDAQAB",
   "minimum_chrome_version": "116",
   "permissions": [

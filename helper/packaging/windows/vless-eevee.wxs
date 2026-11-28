@@ -10,7 +10,7 @@
     <CustomAction
       Id="StartWorker"
       FileRef="HelperExe"
-      ExeCommand="-daemon"
+      ExeCommand="-daemon -data-dir &quot;[LocalAppDataFolder]vless-eevee&quot;"
       Execute="immediate"
       Impersonate="yes"
       Return="asyncNoWait" />
@@ -31,12 +31,16 @@
     <Feature Id="Main" Title="vless-eevee" Level="1">
       <ComponentGroupRef Id="ApplicationFiles" />
       <ComponentRef Id="NativeMessagingRegistration" />
+      <ComponentRef Id="StartMenuShortcut" />
     </Feature>
   </Package>
 
   <Fragment>
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="vless-eevee" />
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="ApplicationProgramsFolder" Name="vless-eevee" />
     </StandardDirectory>
 
     <ComponentGroup Id="ApplicationFiles" Directory="INSTALLFOLDER">
@@ -45,6 +49,9 @@
       </Component>
       <Component Id="Xray" Guid="*">
         <File Source="$(var.PayloadDir)\xray.exe" KeyPath="yes" />
+      </Component>
+      <Component Id="Tray" Guid="*">
+        <File Id="TrayExe" Source="$(var.PayloadDir)\tray.exe" KeyPath="yes" />
       </Component>
       <Component Id="GeoIP" Guid="*">
         <File Source="$(var.PayloadDir)\geoip.dat" KeyPath="yes" />
@@ -69,10 +76,35 @@
       </RegistryKey>
       <RegistryKey Root="HKLM" Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Run">
         <RegistryValue
-          Type="string"
+          Type="expandable"
           Name="vless-eevee-worker"
-          Value="&quot;[INSTALLFOLDER]helper.exe&quot; -daemon" />
+          Value="&quot;[INSTALLFOLDER]helper.exe&quot; -daemon -data-dir &quot;%LOCALAPPDATA%\vless-eevee&quot;" />
       </RegistryKey>
+      <RegistryKey Root="HKCU" Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Run">
+        <RegistryValue
+          Type="expandable"
+          Name="vless-eevee-tray"
+          Value="&quot;[INSTALLFOLDER]tray.exe&quot; -data-dir &quot;%LOCALAPPDATA%\vless-eevee&quot;" />
+      </RegistryKey>
+    </Component>
+
+    <Component Id="StartMenuShortcut" Directory="ApplicationProgramsFolder" Guid="*">
+      <Shortcut
+        Id="VlessEeveeStartMenuShortcut"
+        Name="vless-eevee"
+        Target="[#TrayExe]"
+        WorkingDirectory="INSTALLFOLDER" />
+      <RemoveFolder
+        Id="RemoveApplicationProgramsFolder"
+        Directory="ApplicationProgramsFolder"
+        On="uninstall" />
+      <RegistryValue
+        Root="HKLM"
+        Key="Software\vless-eevee"
+        Name="StartMenuShortcut"
+        Type="integer"
+        Value="1"
+        KeyPath="yes" />
     </Component>
   </Fragment>
 </Wix>

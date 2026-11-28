@@ -12,7 +12,6 @@
       <h1>vless-eevee</h1>
     </div>
     <div class="top-right">
-      <span class="status-label" id="statusLabel">выключено</span>
       <button id="settingsBtn" class="icon-btn" data-icon="sliders"
               title="Настройки" aria-label="Настройки" aria-pressed="false"></button>
     </div>
@@ -86,14 +85,14 @@
         <div class="set-card">
           <label class="row">
             <span class="row-text">
-              <span class="row-title">Обновлять автоматически</span>
+              <span class="row-title">Обновлять подписки автоматически</span>
               <span class="row-desc">Списки серверов обновляются сами, пока открыт браузер</span>
             </span>
             <span class="switch"><input type="checkbox" id="optAutoUpdate"><span class="track"></span></span>
           </label>
           <label class="row">
             <span class="row-text">
-              <span class="row-title">Как часто обновлять</span>
+              <span class="row-title">Как часто обновлять подписки</span>
             </span>
             <select id="optInterval" class="select">
               <option value="1">Каждый час</option>
@@ -106,7 +105,7 @@
           </label>
           <label class="row">
             <span class="row-text">
-              <span class="row-title">Обновлять при запуске браузера</span>
+              <span class="row-title">Обновлять подписки при запуске браузера</span>
             </span>
             <span class="switch"><input type="checkbox" id="optUpdateOnStart"><span class="track"></span></span>
           </label>
@@ -128,6 +127,37 @@
               <span class="row-desc">К тому серверу, к которому вы подключались последним</span>
             </span>
             <span class="switch"><input type="checkbox" id="optAutoConnect"><span class="track"></span></span>
+          </label>
+        </div>
+      </div>
+
+      <div class="set-group">
+        <h3>Проверка скорости</h3>
+        <div class="set-card">
+          <label class="row">
+            <span class="row-text">
+              <span class="row-title">Объём данных</span>
+              <span class="row-desc">Объём загрузки для измерения скорости</span>
+            </span>
+            <select id="optSpeedTestMB" class="select setting-select" aria-label="Объём данных для проверки скорости">
+              <option value="1">1 МБ</option>
+              <option value="5">5 МБ</option>
+              <option value="10">10 МБ</option>
+              <option value="50">50 МБ</option>
+            </select>
+          </label>
+          <label class="row">
+            <span class="row-text">
+              <span class="row-title">Таймаут</span>
+              <span class="row-desc">Для соединения и загрузки, без учёта запуска туннеля</span>
+            </span>
+            <select id="optSpeedTimeoutSeconds" class="select setting-select" aria-label="Таймаут проверки скорости">
+              <option value="1">1 сек</option>
+              <option value="2">2 сек</option>
+              <option value="3">3 сек</option>
+              <option value="5">5 сек</option>
+              <option value="10">10 сек</option>
+            </select>
           </label>
         </div>
       </div>
@@ -160,6 +190,21 @@
             </span>
             <span class="switch"><input type="checkbox" id="optShowTech"><span class="track"></span></span>
           </label>
+        </div>
+      </div>
+
+      <div class="set-group">
+        <h3>Версии компонентов</h3>
+        <div class="set-card">
+          <div class="row static">
+            <span class="row-text"><span class="row-title">Helper</span></span>
+            <span id="helperVersionValue" class="version-value">Проверяю…</span>
+          </div>
+          <div class="row static">
+            <span class="row-text"><span class="row-title">Расширение</span></span>
+            <span id="extensionVersionValue" class="version-value"></span>
+          </div>
+          <p id="versionWarning" class="version-warning" hidden></p>
         </div>
       </div>
 

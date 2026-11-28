@@ -12,7 +12,7 @@ $TempDir = Join-Path ([System.IO.Path]::GetTempPath()) ([guid]::NewGuid().ToStri
 $PayloadDir = Join-Path $TempDir "payload"
 $XrayArchive = Join-Path $TempDir "xray.zip"
 $OutputDir = Join-Path $RepoRoot "dist"
-$OutputPath = Join-Path $OutputDir "vless-eevee-$Version-x64.msi"
+$OutputPath = Join-Path $OutputDir "vless-eevee.v$Version.windows.x64.msi"
 
 New-Item -ItemType Directory -Force -Path $PayloadDir, $OutputDir | Out-Null
 
@@ -21,11 +21,24 @@ try {
     try {
         $env:GOOS = "windows"
         $env:GOARCH = "amd64"
-        go build -ldflags "-H=windowsgui" -o (Join-Path $PayloadDir "helper.exe") .
+        go build -ldflags "-H=windowsgui -X main.appVersion=$Version" -o (Join-Path $PayloadDir "helper.exe") .
         if ($LASTEXITCODE -ne 0) { throw "Go helper build failed." }
     } finally {
         Pop-Location
         Remove-Item Env:GOOS, Env:GOARCH -ErrorAction SilentlyContinue
+    }
+
+    Push-Location (Join-Path $RepoRoot "helper\trayapp")
+    try {
+        $env:GOOS = "windows"
+        $env:GOARCH = "amd64"
+        $env:CGO_ENABLED = "1"
+        $env:CC = "gcc"
+        go build -ldflags "-H=windowsgui -X main.appVersion=$Version" -o (Join-Path $PayloadDir "tray.exe") .
+        if ($LASTEXITCODE -ne 0) { throw "Go tray build failed." }
+    } finally {
+        Pop-Location
+        Remove-Item Env:GOOS, Env:GOARCH, Env:CGO_ENABLED, Env:CC -ErrorAction SilentlyContinue
     }
 
     Invoke-WebRequest `

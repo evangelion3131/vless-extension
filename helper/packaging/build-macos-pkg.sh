@@ -11,11 +11,13 @@ VERSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["vers
 case "$ARCH" in
   amd64)
     GOARCH="amd64"
+    CLANG_ARCH="x86_64"
     XRAY_ARCHIVE="Xray-macos-64.zip"
     PACKAGE_ARCH="x64"
     ;;
   arm64)
     GOARCH="arm64"
+    CLANG_ARCH="arm64"
     XRAY_ARCHIVE="Xray-macos-arm64-v8a.zip"
     PACKAGE_ARCH="arm64"
     ;;
@@ -30,7 +32,9 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 PAYLOAD="$TMP_DIR/payload"
 APP_DIR="$PAYLOAD/Library/Application Support/vless-eevee"
 HOST_DIR="$PAYLOAD/Library/Google/Chrome/NativeMessagingHosts"
-mkdir -p "$APP_DIR" "$HOST_DIR"
+TRAY_APP="$PAYLOAD/Applications/vless-eevee.app"
+LAUNCH_AGENT_DIR="$PAYLOAD/Library/LaunchAgents"
+mkdir -p "$APP_DIR" "$HOST_DIR" "$TRAY_APP/Contents/MacOS" "$LAUNCH_AGENT_DIR"
 mkdir -p "$TMP_DIR/scripts"
 
 cat > "$TMP_DIR/scripts/postinstall" << 'EOF'
@@ -88,13 +92,54 @@ PLIST
 chmod 644 /Library/LaunchDaemons/com.vless.eevee.worker.plist
 launchctl bootout system/com.vless.eevee.worker >/dev/null 2>&1 || true
 launchctl bootstrap system /Library/LaunchDaemons/com.vless.eevee.worker.plist
+GUI_UID="$(/usr/bin/stat -f '%u' /dev/console)"
+if [ "$GUI_UID" -gt 0 ]; then
+  launchctl bootstrap "gui/$GUI_UID" /Library/LaunchAgents/com.vless.eevee.tray.plist >/dev/null 2>&1 || true
+fi
 EOF
 chmod 755 "$TMP_DIR/scripts/postinstall"
 
 (
   cd "$REPO_ROOT/helper"
-  GOOS=darwin GOARCH="$GOARCH" go build -o "$APP_DIR/helper" .
+  GOOS=darwin GOARCH="$GOARCH" go build \
+    -ldflags "-X main.appVersion=$VERSION" \
+    -o "$APP_DIR/helper" .
 )
+(
+  cd "$REPO_ROOT/helper/trayapp"
+  CGO_ENABLED=1 GOOS=darwin GOARCH="$GOARCH" CC="clang -arch $CLANG_ARCH" go build \
+    -ldflags "-X main.appVersion=$VERSION" \
+    -o "$TRAY_APP/Contents/MacOS/tray" .
+)
+cat > "$TRAY_APP/Contents/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleExecutable</key><string>tray</string>
+  <key>CFBundleIdentifier</key><string>com.vless.eevee.tray</string>
+  <key>CFBundleName</key><string>vless-eevee</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>LSUIElement</key><true/>
+</dict>
+</plist>
+PLIST
+cat > "$LAUNCH_AGENT_DIR/com.vless.eevee.tray.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.vless.eevee.tray</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Applications/vless-eevee.app/Contents/MacOS/tray</string>
+    <string>-data-dir</string>
+    <string>/Library/Application Support/vless-eevee</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+</dict>
+</plist>
+PLIST
 
 curl --fail --location --retry 3 \
   "https://github.com/XTLS/Xray-core/releases/latest/download/$XRAY_ARCHIVE" \
@@ -103,6 +148,7 @@ unzip -j -o "$TMP_DIR/xray.zip" xray geoip.dat geosite.dat -d "$APP_DIR"
 chmod 755 "$APP_DIR/helper" "$APP_DIR/xray"
 codesign --force --sign - "$APP_DIR/helper"
 codesign --force --sign - "$APP_DIR/xray"
+codesign --force --sign - "$TRAY_APP/Contents/MacOS/tray"
 
 "$SCRIPT_DIR/build-extension-crx.sh" "$APP_DIR/vless-eevee.crx" "${VLESS_EEVEE_KEY_FILE:-}"
 cp "$APP_DIR/vless-eevee.crx.version" "$APP_DIR/extension-version.txt"
@@ -118,7 +164,7 @@ cat > "$HOST_DIR/$HOST_NAME.json" << EOF
 EOF
 
 mkdir -p "$REPO_ROOT/dist"
-OUTPUT="$REPO_ROOT/dist/vless-eevee-${VERSION}-${PACKAGE_ARCH}.pkg"
+OUTPUT="$REPO_ROOT/dist/vless-eevee.v${VERSION}.macos.${PACKAGE_ARCH}.pkg"
 pkgbuild \
   --root "$PAYLOAD" \
   --scripts "$TMP_DIR/scripts" \
